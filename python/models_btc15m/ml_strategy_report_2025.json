@@ -1,0 +1,42 @@
+{
+  "note": "Pure ML spam overtrades. Best honest 2025 setup is regime short_only (+ML optional). See summary fields below for last run only.",
+  "test_year": 2025,
+  "train_years": "<2025",
+  "mode": "long_only",
+  "model": "LightGBM",
+  "n_features": 116,
+  "train_bars": 257690,
+  "test_bars": 35040,
+  "starting_capital": 100000.0,
+  "end_equity": 98743.43175306558,
+  "profit_usd": -1256.5682469344174,
+  "return_pct": -1.2565682469344197,
+  "buy_hold_pct": -6.4149103668332375,
+  "max_dd_pct": -1.4031164184538647,
+  "trades": 6,
+  "win_rate": 0.0,
+  "n_long": 6,
+  "n_short": 0,
+  "long_pnl": -1256.5682469344367,
+  "short_pnl": 0.0,
+  "thr_long": 0.7,
+  "thr_short": 0.3,
+  "risk": 0.02,
+  "compare": {
+    "long_only": {
+      "end_equity": 98743.43175306558,
+      "return_pct": -1.2565682469344197,
+      "profit_usd": -1256.5682469344174,
+      "trades": 6,
+      "win_rate": 0.0,
+      "max_dd_pct": -1.4031164184538647,
+      "buy_hold_pct": -6.4149103668332375,
+      "avg_win": 0.0,
+      "avg_loss": -209.42804115573946,
+      "long_pnl": -1256.5682469344367,
+      "short_pnl": 0.0,
+      "n_long": 6,
+      "n_short": 0
+    }
+  }
+}

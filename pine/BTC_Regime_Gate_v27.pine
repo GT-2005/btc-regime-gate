@@ -1,0 +1,360 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ganesh2005
+// BTC Regime Gate v2.7 — ONE position only (long OR short)
+// Long: BUY → hold → SELL exit. Short: SELL → hold → COVER (buy back).
+// No new entry until flat + cooldown. Research: TS momentum filter (Moskowitz).
+// Use on BTCUSDT 15m. HTF default = 60 (1h).
+
+//@version=6
+indicator("BTC Regime Gate v2.7", overlay = true, max_labels_count = 500, max_lines_count = 500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+grpReg = "Regime"
+adxLen           = input.int(14, "ADX Length", group = grpReg)
+adxTrend         = input.float(30.0, "ADX Trend ≥", group = grpReg)
+adxRange         = input.float(18.0, "ADX Range ≤", group = grpReg)
+bbLen            = input.int(20, "BB Width Length", group = grpReg)
+bbWidthLookback  = input.int(100, "BB Width Median Lookback", group = grpReg)
+volShockMult     = input.float(2.5, "Vol Shock ATR / ATR_MA ≥", step = 0.1, group = grpReg)
+atrMaLen         = input.int(50, "ATR MA Length (shock)", group = grpReg)
+
+grpHtf = "Higher Timeframe / TS Momentum"
+htfTf            = input.timeframe("60", "HTF (1h for 15m chart)", group = grpHtf)
+htfEmaFast       = input.int(50, "HTF EMA Fast", group = grpHtf)
+htfEmaSlow       = input.int(200, "HTF EMA Slow", group = grpHtf)
+useTsMom         = input.bool(true, "TS Momentum filter (KEEP paper)", group = grpHtf)
+tsMomDays        = input.int(60, "TS Mom lookback (daily bars)", minval = 20, maxval = 252, group = grpHtf)
+
+grpA = "Playbook A — Trend Pullback"
+emaFast          = input.int(21, "EMA Fast", group = grpA)
+emaSlow          = input.int(50, "EMA Slow", group = grpA)
+pullbackTol      = input.float(0.35, "Pullback Touch (× ATR)", step = 0.05, group = grpA)
+atrSlTrend       = input.float(1.0, "Initial SL (× ATR)", step = 0.1, group = grpA)
+atrTpTrend       = input.float(3.0, "TP (× ATR)", step = 0.1, group = grpA)
+atrTrailTrend    = input.float(2.5, "Trail (× ATR)", step = 0.1, group = grpA)
+beAtR            = input.float(1.0, "Move SL to BE after (× ATR)", step = 0.1, group = grpA)
+maxHoldTrend     = input.int(96, "Max Hold Bars (A)", group = grpA)
+emaSepAtr        = input.float(0.25, "Min |EMA21-EMA50| / ATR", step = 0.05, group = grpA)
+
+grpB = "Playbook B — Mean Reversion"
+vwapLen          = input.int(48, "Rolling VWAP Length", group = grpB)
+zLen             = input.int(48, "VWAP Z Length", group = grpB)
+vwapZEntry       = input.float(2.2, "|VWAP z| Entry", step = 0.1, group = grpB)
+vwapZExit        = input.float(0.25, "|VWAP z| Target", step = 0.05, group = grpB)
+rsiLen           = input.int(14, "RSI Length", group = grpB)
+rsiOs            = input.float(28.0, "RSI Oversold", group = grpB)
+rsiOb            = input.float(72.0, "RSI Overbought", group = grpB)
+atrSlRange       = input.float(1.0, "SL (× ATR)", step = 0.1, group = grpB)
+atrTpRange       = input.float(2.0, "TP (× ATR)", step = 0.1, group = grpB)
+maxHoldRange     = input.int(16, "Max Hold Bars (B)", group = grpB)
+
+grpSoft = "Position / Soft Filters"
+tradeMode        = input.string("Short only", "Trade mode", options = ["Auto (daily trend)", "Both", "Long only", "Short only"], group = grpSoft)
+rvolLen          = input.int(20, "RVOL SMA Length", group = grpSoft)
+rvolMin          = input.float(1.2, "Min RVOL", step = 0.1, group = grpSoft)
+scoreLong        = input.float(70.0, "Score Long ≥", group = grpSoft)
+cooldownBars     = input.int(16, "Cooldown after EXIT before new entry", group = grpSoft)
+minHoldBars      = input.int(4, "Min bars in trade before exit allowed", group = grpSoft)
+slopeEmaLen      = input.int(10, "Kalman Proxy EMA Length", group = grpSoft)
+
+grpVis = "Visuals"
+showRegimeBg     = input.bool(true, "Regime Background", group = grpVis)
+showEmas         = input.bool(true, "Show EMA 21/50", group = grpVis)
+showLevels       = input.bool(true, "Show SL / Trail / TP", group = grpVis)
+showBuySell      = input.bool(true, "Show entry / exit markers", group = grpVis)
+showPlaybookTag  = input.bool(true, "Show A/B Tag on entries", group = grpVis)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CORE SERIES
+// ═══════════════════════════════════════════════════════════════════════════
+atr = ta.atr(14)
+atrMa = ta.sma(atr, atrMaLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+
+bbBasis = ta.sma(close, bbLen)
+bbDev = ta.stdev(close, bbLen)
+bbWidth = bbBasis != 0 ? (2.0 * bbDev) / bbBasis : 0.0
+bbWidthMed = ta.percentile_linear_interpolation(bbWidth, bbWidthLookback, 50)
+
+emaF = ta.ema(close, emaFast)
+emaS = ta.ema(close, emaSlow)
+
+kalmanProxy = ta.ema(close, slopeEmaLen)
+kfVel = kalmanProxy - kalmanProxy[1]
+
+volSma = ta.sma(volume, rvolLen)
+rvol = volSma > 0 ? volume / volSma : 0.0
+
+float volSum = math.sum(volume, vwapLen)
+float typVol = math.sum(hlc3 * volume, vwapLen)
+rollVwap = volSum != 0 ? typVol / volSum : close
+vwapDev = ta.stdev(close - rollVwap, zLen)
+vwapZ = vwapDev != 0 ? (close - rollVwap) / vwapDev : 0.0
+rsi = ta.rsi(close, rsiLen)
+
+htfEmaF = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEmaFast), barmerge.gaps_off, barmerge.lookahead_off)
+htfEmaS = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEmaSlow), barmerge.gaps_off, barmerge.lookahead_off)
+htfUp = htfEmaF > htfEmaS
+htfDn = htfEmaF < htfEmaS
+
+dailyClose = request.security(syminfo.tickerid, "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma50 = request.security(syminfo.tickerid, "D", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma200 = request.security(syminfo.tickerid, "D", ta.ema(close, 200), barmerge.gaps_off, barmerge.lookahead_off)
+dailyUp = dailyClose > dailyEma50 and dailyEma50 > dailyEma200
+dailyDn = dailyClose < dailyEma50
+
+// Time-series momentum (Moskowitz): sign of ~N-day return on daily series
+tsMomRet = request.security(syminfo.tickerid, "D", close / close[tsMomDays] - 1.0, barmerge.gaps_off, barmerge.lookahead_off)
+tsMomUp = tsMomRet > 0
+tsMomDn = tsMomRet < 0
+
+allowLong = tradeMode == "Both" or tradeMode == "Long only" or (tradeMode == "Auto (daily trend)" and dailyUp)
+allowShort = tradeMode == "Both" or tradeMode == "Short only" or (tradeMode == "Auto (daily trend)" and dailyDn)
+if useTsMom
+    allowLong := allowLong and tsMomUp
+    allowShort := allowShort and tsMomDn
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REGIME
+// ═══════════════════════════════════════════════════════════════════════════
+volShock = atrMa > 0 and (atr / atrMa) >= volShockMult
+isTrend = not volShock and adx >= adxTrend
+isRange = not volShock and adx <= adxRange
+isNeutral = not volShock and not isTrend and not isRange
+bbWide = bbWidth >= bbWidthMed
+
+regimeId = volShock ? 3 : isTrend ? 1 : isRange ? 2 : 0
+
+bgcolor(showRegimeBg ? (volShock ? color.new(color.orange, 90) : isTrend ? color.new(color.teal, 92) : isRange ? color.new(color.purple, 92) : color.new(color.gray, 95)) : na)
+plot(showEmas ? emaF : na, "EMA Fast", color = color.new(color.teal, 0))
+plot(showEmas ? emaS : na, "EMA Slow", color = color.new(color.red, 0))
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYBOOK SETUPS (raw — not yet gated by position)
+// ═══════════════════════════════════════════════════════════════════════════
+emaSep = math.abs(emaF - emaS) / atr
+strongSep = emaSep >= emaSepAtr
+pulledLong = ta.lowest(low, 6) <= emaF + pullbackTol * atr
+nearEmaLong = low <= emaF + pullbackTol * atr or math.abs(close - emaF) <= pullbackTol * atr
+reclaimLongA = close > emaF and close >= open and close > close[1] and close > emaS
+structUpA = emaF > emaS and strongSep
+longHardA = isTrend and htfUp and structUpA and pulledLong and nearEmaLong and reclaimLongA and rvol >= rvolMin and kfVel >= 0
+
+pulledShort = ta.highest(high, 6) >= emaF - pullbackTol * atr
+nearEmaShort = high >= emaF - pullbackTol * atr or math.abs(close - emaF) <= pullbackTol * atr
+reclaimShortA = close < emaF and close <= open and close < close[1] and close < emaS
+structDnA = emaF < emaS and strongSep
+bearReject = close < open and high >= emaF and close < open[1]
+shortHardA = isTrend and htfDn and structDnA and pulledShort and nearEmaShort and reclaimShortA and rvol >= rvolMin and kfVel <= 0
+shortHardS = isTrend and htfDn and structDnA and bearReject and rvol >= rvolMin and kfVel <= 0 and rsi >= 45
+
+scoreA_long = (longHardA ? 40.0 : 0.0) + (htfUp ? 20.0 : 0.0) + (rvol >= rvolMin ? 15.0 : 0.0) + (kfVel >= 0 ? 10.0 : 0.0) + (bbWide ? 5.0 : 0.0) + (structUpA ? 10.0 : 0.0)
+scoreA_short = ((shortHardA or shortHardS) ? 40.0 : 0.0) + (htfDn ? 20.0 : 0.0) + (rvol >= rvolMin ? 15.0 : 0.0) + (kfVel <= 0 ? 10.0 : 0.0) + (bbWide ? 5.0 : 0.0) + (structDnA ? 10.0 : 0.0)
+
+longSigA = longHardA and scoreA_long >= scoreLong and allowLong
+shortSigA = ((shortHardA and scoreA_short >= scoreLong) or (shortHardS and scoreA_short >= 50)) and allowShort
+
+revUpB = close > open and close > close[1]
+revDnB = close < open and close < close[1]
+longHardB = isRange and vwapZ <= -vwapZEntry and rsi <= rsiOs and revUpB and rvol >= rvolMin
+shortHardB = isRange and vwapZ >= vwapZEntry and rsi >= rsiOb and revDnB and rvol >= rvolMin
+scoreB_long = (longHardB ? 40.0 : 0.0) + (vwapZ <= -vwapZEntry ? 20.0 : 0.0) + (rvol >= rvolMin ? 15.0 : 0.0) + (rsi <= rsiOs ? 15.0 : 0.0) + (revUpB ? 10.0 : 0.0)
+scoreB_short = (shortHardB ? 40.0 : 0.0) + (vwapZ >= vwapZEntry ? 20.0 : 0.0) + (rvol >= rvolMin ? 15.0 : 0.0) + (rsi >= rsiOb ? 15.0 : 0.0) + (revDnB ? 10.0 : 0.0)
+longSigB = longHardB and scoreB_long >= scoreLong and allowLong
+shortSigB = shortHardB and scoreB_short >= scoreLong and allowShort
+
+scoreDisp = isTrend ? math.max(scoreA_long, scoreA_short) : isRange ? math.max(scoreB_long, scoreB_short) : 50.0
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ONE-POSITION STATE MACHINE
+// pos: 0=flat, 1=longA, 2=shortA, 3=longB, 4=shortB
+// Long cycle:  BUY entry → SELL exit
+// Short cycle: SELL entry → COVER exit (buy back)
+// ═══════════════════════════════════════════════════════════════════════════
+var int pos = 0
+var int entryBar = na
+var float entryPrice = na
+var float stopLevel = na
+var float tpLevel = na
+var float trailLevel = na
+var int lastExitBar = -999999
+var int playbook = 0  // 1=A, 2=B
+
+// marker flags (reset every bar)
+buyEntry = false      // open long
+sellEntry = false     // open short (sell high)
+sellExit = false      // close long (sell)
+coverExit = false     // close short (buy back)
+entryIsA = false
+exitReason = ""
+
+inPosition = pos != 0
+flat = pos == 0
+cooled = bar_index - lastExitBar >= cooldownBars
+canOpen = flat and cooled and not volShock
+
+// ── 1) Manage EXIT first if in a trade (never open a second) ───────────────
+heldBars = inPosition ? bar_index - entryBar : 0
+canExit = inPosition and heldBars >= minHoldBars
+
+if pos == 1 and canExit
+    if high >= entryPrice + beAtR * atr
+        stopLevel := math.max(nz(stopLevel, entryPrice), entryPrice)
+    trailLevel := math.max(nz(trailLevel, close - atrTrailTrend * atr), close - atrTrailTrend * atr)
+    stopLevel := math.max(nz(stopLevel, trailLevel), trailLevel)
+    if not na(tpLevel) and high >= tpLevel
+        sellExit := true
+        exitReason := "Long TP"
+    else if low <= stopLevel
+        sellExit := true
+        exitReason := "Long SL/trail"
+    else if heldBars >= maxHoldTrend
+        sellExit := true
+        exitReason := "Long time"
+
+if pos == 2 and canExit
+    if low <= entryPrice - beAtR * atr
+        stopLevel := math.min(nz(stopLevel, entryPrice), entryPrice)
+    trailLevel := math.min(nz(trailLevel, close + atrTrailTrend * atr), close + atrTrailTrend * atr)
+    stopLevel := math.min(nz(stopLevel, trailLevel), trailLevel)
+    if not na(tpLevel) and low <= tpLevel
+        coverExit := true
+        exitReason := "Short TP"
+    else if high >= stopLevel
+        coverExit := true
+        exitReason := "Short SL/trail"
+    else if heldBars >= maxHoldTrend
+        coverExit := true
+        exitReason := "Short time"
+
+if pos == 3 and canExit
+    if low <= stopLevel
+        sellExit := true
+        exitReason := "Long B SL"
+    else if (not na(tpLevel) and high >= tpLevel) or vwapZ >= -vwapZExit
+        sellExit := true
+        exitReason := "Long B TP"
+    else if heldBars >= maxHoldRange
+        sellExit := true
+        exitReason := "Long B time"
+
+if pos == 4 and canExit
+    if high >= stopLevel
+        coverExit := true
+        exitReason := "Short B SL"
+    else if (not na(tpLevel) and low <= tpLevel) or vwapZ <= vwapZExit
+        coverExit := true
+        exitReason := "Short B TP"
+    else if heldBars >= maxHoldRange
+        coverExit := true
+        exitReason := "Short B time"
+
+exitNow = sellExit or coverExit
+if exitNow
+    pos := 0
+    lastExitBar := bar_index
+    entryBar := na
+    entryPrice := na
+    stopLevel := na
+    tpLevel := na
+    trailLevel := na
+    playbook := 0
+
+// ── 2) Open at most ONE new position only when flat (after exit + cooldown) ─
+// Recompute canOpen after possible exit THIS bar → block same-bar re-entry
+canOpenNow = pos == 0 and (bar_index - lastExitBar >= cooldownBars) and not volShock and not exitNow
+
+wantShort = allowShort and (shortSigA or shortSigB)
+wantLong = allowLong and (longSigA or longSigB)
+
+if canOpenNow and wantShort
+    if shortSigA
+        pos := 2
+        playbook := 1
+        entryIsA := true
+        stopLevel := close + atrSlTrend * atr
+        tpLevel := close - atrTpTrend * atr
+        trailLevel := close + atrTrailTrend * atr
+    else
+        pos := 4
+        playbook := 2
+        entryIsA := false
+        stopLevel := close + atrSlRange * atr
+        tpLevel := close - atrTpRange * atr
+        trailLevel := na
+    entryBar := bar_index
+    entryPrice := close
+    sellEntry := true
+else if canOpenNow and wantLong
+    if longSigA
+        pos := 1
+        playbook := 1
+        entryIsA := true
+        stopLevel := close - atrSlTrend * atr
+        tpLevel := close + atrTpTrend * atr
+        trailLevel := close - atrTrailTrend * atr
+    else
+        pos := 3
+        playbook := 2
+        entryIsA := false
+        stopLevel := close - atrSlRange * atr
+        tpLevel := close + atrTpRange * atr
+        trailLevel := na
+    entryBar := bar_index
+    entryPrice := close
+    buyEntry := true
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MARKERS — entry only when position opens; exit only when it closes
+// ═══════════════════════════════════════════════════════════════════════════
+plotshape(showBuySell and buyEntry, title = "BUY (open long)", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.normal, text = "BUY", textcolor = color.white)
+plotshape(showBuySell and sellEntry, title = "SELL (open short)", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.normal, text = "SELL", textcolor = color.white)
+plotshape(showBuySell and sellExit, title = "SELL (close long)", style = shape.xcross, location = location.abovebar, color = color.new(color.orange, 0), size = size.small, text = "EXIT", textcolor = color.orange)
+plotshape(showBuySell and coverExit, title = "COVER (close short)", style = shape.xcross, location = location.belowbar, color = color.new(color.aqua, 0), size = size.small, text = "COVER", textcolor = color.aqua)
+
+plotshape(showBuySell and showPlaybookTag and buyEntry and entryIsA, title = "A long", style = shape.labelup, location = location.belowbar, color = color.new(color.teal, 70), size = size.tiny, text = "A", textcolor = color.white)
+plotshape(showBuySell and showPlaybookTag and buyEntry and not entryIsA, title = "B long", style = shape.labelup, location = location.belowbar, color = color.new(color.aqua, 70), size = size.tiny, text = "B", textcolor = color.white)
+plotshape(showBuySell and showPlaybookTag and sellEntry and entryIsA, title = "A short", style = shape.labeldown, location = location.abovebar, color = color.new(color.maroon, 70), size = size.tiny, text = "A", textcolor = color.white)
+plotshape(showBuySell and showPlaybookTag and sellEntry and not entryIsA, title = "B short", style = shape.labeldown, location = location.abovebar, color = color.new(color.fuchsia, 70), size = size.tiny, text = "B", textcolor = color.white)
+
+plot(showLevels and pos != 0 ? stopLevel : na, "Stop", color = color.red, style = plot.style_linebr, linewidth = 2)
+plot(showLevels and pos != 0 ? tpLevel : na, "TP", color = color.green, style = plot.style_linebr, linewidth = 2)
+plot(showLevels and (pos == 1 or pos == 2) ? trailLevel : na, "Trail", color = color.orange, style = plot.style_linebr, linewidth = 1)
+
+plot(scoreDisp, "Score", display = display.data_window)
+plot(adx, "ADX", display = display.data_window)
+plot(vwapZ, "VWAP z", display = display.data_window)
+plot(rvol, "RVOL", display = display.data_window)
+plot(regimeId, "RegimeId", display = display.data_window)
+plot(pos, "PosState", display = display.data_window)
+
+alertcondition(sellEntry, title = "SELL open short", message = "BTC Regime Gate: OPEN SHORT (sell) — one position only")
+alertcondition(buyEntry, title = "BUY open long", message = "BTC Regime Gate: OPEN LONG (buy) — one position only")
+alertcondition(coverExit, title = "COVER close short", message = "BTC Regime Gate: COVER short (buy back)")
+alertcondition(sellExit, title = "EXIT close long", message = "BTC Regime Gate: EXIT long (sell)")
+
+var table leg = table.new(position.top_right, 2, 9, bgcolor = color.new(color.black, 80), border_width = 1)
+posTxt = pos == 0 ? "FLAT" : pos == 1 ? "LONG A" : pos == 2 ? "SHORT A" : pos == 3 ? "LONG B" : "SHORT B"
+whyFlat = volShock ? "Vol shock" : pos != 0 ? "In trade — wait EXIT/COVER" : not cooled ? "Cooldown after exit" : isNeutral ? "Neutral regime" : useTsMom and not (tsMomUp or tsMomDn) ? "TS mom flat" : wantShort or wantLong ? "Setup (blocked if in trade)" : isTrend ? "Wait pullback" : isRange ? "Wait VWAP stretch" : "No setup"
+
+if barstate.islast
+    table.cell(leg, 0, 0, "Mode", text_color = color.white)
+    table.cell(leg, 1, 0, tradeMode, text_color = color.yellow)
+    table.cell(leg, 0, 1, "TS Mom", text_color = color.white)
+    table.cell(leg, 1, 1, not useTsMom ? "OFF" : tsMomUp ? "UP→longs" : tsMomDn ? "DN→shorts" : "FLAT", text_color = color.aqua)
+    table.cell(leg, 0, 2, "Regime", text_color = color.white)
+    table.cell(leg, 1, 2, volShock ? "SHOCK" : isTrend ? "TREND" : isRange ? "RANGE" : "NEUTRAL", text_color = color.yellow)
+    table.cell(leg, 0, 3, "HTF", text_color = color.white)
+    table.cell(leg, 1, 3, htfUp ? "UP" : htfDn ? "DOWN" : "FLAT", text_color = color.aqua)
+    table.cell(leg, 0, 4, "Score", text_color = color.white)
+    table.cell(leg, 1, 4, str.tostring(scoreDisp, "#.##"), text_color = color.white)
+    table.cell(leg, 0, 5, "ADX", text_color = color.white)
+    table.cell(leg, 1, 5, str.tostring(adx, "#.##"), text_color = color.white)
+    table.cell(leg, 0, 6, "Pos", text_color = color.white)
+    table.cell(leg, 1, 6, posTxt, text_color = pos == 0 ? color.gray : color.lime)
+    table.cell(leg, 0, 7, "Held", text_color = color.white)
+    table.cell(leg, 1, 7, pos == 0 ? "-" : str.tostring(heldBars), text_color = color.white)
+    table.cell(leg, 0, 8, "Why", text_color = color.white)
+    table.cell(leg, 1, 8, whyFlat, text_color = color.orange)

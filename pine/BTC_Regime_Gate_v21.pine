@@ -1,0 +1,403 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Ganesh2005
+// BTC Regime Gate v2.3 — short_only default, SL 1 ATR / TP 3 ATR
+// Use on BTCUSDT 15m. HTF default = 60 (1h).
+
+//@version=6
+indicator("BTC Regime Gate v2.3", overlay = true, max_labels_count = 500, max_lines_count = 500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+grpReg = "Regime"
+adxLen           = input.int(14, "ADX Length", group = grpReg)
+adxTrend         = input.float(30.0, "ADX Trend ≥", group = grpReg)
+adxRange         = input.float(18.0, "ADX Range ≤", group = grpReg)
+bbLen            = input.int(20, "BB Width Length", group = grpReg)
+bbWidthLookback  = input.int(100, "BB Width Median Lookback", group = grpReg)
+volShockMult     = input.float(2.5, "Vol Shock ATR / ATR_MA ≥", step = 0.1, group = grpReg)
+atrMaLen         = input.int(50, "ATR MA Length (shock)", group = grpReg)
+
+grpHtf = "Higher Timeframe"
+htfTf            = input.timeframe("60", "HTF (1h for 15m chart)", group = grpHtf)
+htfEmaFast       = input.int(50, "HTF EMA Fast", group = grpHtf)
+htfEmaSlow       = input.int(200, "HTF EMA Slow", group = grpHtf)
+
+grpA = "Playbook A — Trend Pullback"
+emaFast          = input.int(21, "EMA Fast", group = grpA)
+emaSlow          = input.int(50, "EMA Slow", group = grpA)
+pullbackTol      = input.float(0.35, "Pullback Touch (× ATR)", step = 0.05, group = grpA)
+atrSlTrend       = input.float(1.0, "Initial SL (× ATR) — small loss", step = 0.1, group = grpA)
+atrTpTrend       = input.float(3.0, "TP (× ATR) — big win", step = 0.1, group = grpA)
+atrTrailTrend    = input.float(3.0, "Trail (× ATR) backup", step = 0.1, group = grpA)
+beAtR            = input.float(1.0, "Move SL to BE after (× ATR)", step = 0.1, group = grpA)
+maxHoldTrend     = input.int(96, "Max Hold Bars (A)", group = grpA)
+emaSepAtr        = input.float(0.25, "Min |EMA21-EMA50| / ATR", step = 0.05, group = grpA)
+
+grpB = "Playbook B — Mean Reversion"
+vwapLen          = input.int(48, "Rolling VWAP Length", group = grpB)
+zLen             = input.int(48, "VWAP Z Length", group = grpB)
+vwapZEntry       = input.float(2.2, "|VWAP z| Entry", step = 0.1, group = grpB)
+vwapZExit        = input.float(0.25, "|VWAP z| Target", step = 0.05, group = grpB)
+rsiLen           = input.int(14, "RSI Length", group = grpB)
+rsiOs            = input.float(28.0, "RSI Oversold", group = grpB)
+rsiOb            = input.float(72.0, "RSI Overbought", group = grpB)
+atrSlRange       = input.float(0.8, "SL (× ATR) — small loss", step = 0.1, group = grpB)
+atrTpRange       = input.float(2.0, "TP (× ATR) — big win", step = 0.1, group = grpB)
+maxHoldRange     = input.int(20, "Max Hold Bars (B)", group = grpB)
+
+grpSoft = "Soft Filters / Score"
+tradeMode        = input.string("Short only", "Trade mode", options = ["Auto (daily trend)", "Both", "Long only", "Short only"], group = grpSoft)
+rvolLen          = input.int(20, "RVOL SMA Length", group = grpSoft)
+rvolMin          = input.float(1.2, "Min RVOL", step = 0.1, group = grpSoft)
+scoreLong        = input.float(70.0, "Score Long ≥", group = grpSoft)
+scoreShort       = input.float(40.0, "Score Short ≤", group = grpSoft)
+cooldownBars     = input.int(12, "Min Bars After Exit Before New Trade", group = grpSoft)
+minHoldBars      = input.int(3, "Min Bars In Trade Before Exit Allowed", group = grpSoft)
+slopeEmaLen      = input.int(10, "Kalman Proxy EMA Length", group = grpSoft)
+
+grpVis = "Visuals"
+showRegimeBg     = input.bool(true, "Regime Background", group = grpVis)
+showEmas         = input.bool(true, "Show EMA 21/50", group = grpVis)
+showLevels       = input.bool(true, "Show SL / Trail / TP", group = grpVis)
+showBuySell      = input.bool(true, "Show BUY/SELL Triangles", group = grpVis)
+showPlaybookTag  = input.bool(true, "Show A/B Tag on Signals", group = grpVis)
+showScorePane    = input.bool(false, "Plot Score in Data Window only", group = grpVis)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CORE SERIES
+// ═══════════════════════════════════════════════════════════════════════════
+atr = ta.atr(14)
+atrMa = ta.sma(atr, atrMaLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+
+bbBasis = ta.sma(close, bbLen)
+bbDev = ta.stdev(close, bbLen)
+bbWidth = bbBasis != 0 ? (2.0 * bbDev) / bbBasis : 0.0
+bbWidthMed = ta.percentile_linear_interpolation(bbWidth, bbWidthLookback, 50)
+
+emaF = ta.ema(close, emaFast)
+emaS = ta.ema(close, emaSlow)
+
+// Kalman proxy: EMA slope
+kalmanProxy = ta.ema(close, slopeEmaLen)
+kfVel = kalmanProxy - kalmanProxy[1]
+
+volSma = ta.sma(volume, rvolLen)
+rvol = volSma > 0 ? volume / volSma : 0.0
+
+// Rolling VWAP + z (crypto-friendly; no session dependency)
+float volSum = math.sum(volume, vwapLen)
+float typVol = math.sum(hlc3 * volume, vwapLen)
+rollVwap = volSum != 0 ? typVol / volSum : close
+vwapDev = ta.stdev(close - rollVwap, zLen)
+vwapZ = vwapDev != 0 ? (close - rollVwap) / vwapDev : 0.0
+rsi = ta.rsi(close, rsiLen)
+
+// HTF bias (lagged by 1 HTF bar via lookahead_off default)
+htfEmaF = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEmaFast), barmerge.gaps_off, barmerge.lookahead_off)
+htfEmaS = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEmaSlow), barmerge.gaps_off, barmerge.lookahead_off)
+htfUp = htfEmaF > htfEmaS
+htfDn = htfEmaF < htfEmaS
+
+// Daily macro — Auto: LONG only in clear bull; SHORT when price < daily EMA50
+dailyClose = request.security(syminfo.tickerid, "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma50 = request.security(syminfo.tickerid, "D", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma200 = request.security(syminfo.tickerid, "D", ta.ema(close, 200), barmerge.gaps_off, barmerge.lookahead_off)
+dailyUp = dailyClose > dailyEma50 and dailyEma50 > dailyEma200
+dailyDn = dailyClose < dailyEma50
+allowLong = tradeMode == "Both" or tradeMode == "Long only" or (tradeMode == "Auto (daily trend)" and dailyUp)
+allowShort = tradeMode == "Both" or tradeMode == "Short only" or (tradeMode == "Auto (daily trend)" and dailyDn)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REGIME (ADX primary — BB width is soft only, not a hard block)
+// ═══════════════════════════════════════════════════════════════════════════
+volShock = atrMa > 0 and (atr / atrMa) >= volShockMult
+isTrend = not volShock and adx >= adxTrend
+isRange = not volShock and adx <= adxRange
+isNeutral = not volShock and not isTrend and not isRange
+bbWide = bbWidth >= bbWidthMed   // soft confirm only
+
+regimeId = volShock ? 3 : isTrend ? 1 : isRange ? 2 : 0
+// 0 NEUTRAL, 1 TREND, 2 RANGE, 3 SHOCK
+
+bgcolor(showRegimeBg ? (volShock ? color.new(color.orange, 90) : isTrend ? color.new(color.teal, 92) : isRange ? color.new(color.purple, 92) : color.new(color.gray, 95)) : na)
+
+plot(showEmas ? emaF : na, "EMA Fast", color = color.new(color.teal, 0))
+plot(showEmas ? emaS : na, "EMA Slow", color = color.new(color.red, 0))
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYBOOK A — TREND PULLBACK (quality: deep pullback + strong reclaim)
+// ═══════════════════════════════════════════════════════════════════════════
+emaSep = math.abs(emaF - emaS) / atr
+strongSep = emaSep >= emaSepAtr
+pulledLong = ta.lowest(low, 6) <= emaF + pullbackTol * atr
+nearEmaLong = low <= emaF + pullbackTol * atr or math.abs(close - emaF) <= pullbackTol * atr
+touchLongA = nearEmaLong
+reclaimLongA = close > emaF and close >= open and close > close[1] and close > emaS
+structUpA = emaF > emaS and strongSep
+longHardA = isTrend and htfUp and structUpA and pulledLong and touchLongA and reclaimLongA and rvol >= rvolMin and kfVel >= 0
+
+pulledShort = ta.highest(high, 6) >= emaF - pullbackTol * atr
+nearEmaShort = high >= emaF - pullbackTol * atr or math.abs(close - emaF) <= pullbackTol * atr
+touchShortA = nearEmaShort
+reclaimShortA = close < emaF and close <= open and close < close[1] and close < emaS
+structDnA = emaF < emaS and strongSep
+// Short sell: sell the rally (rejection at EMA) in HTF downtrend
+bearReject = close < open and high >= emaF and close < open[1]
+shortHardA = isTrend and htfDn and structDnA and pulledShort and touchShortA and reclaimShortA and rvol >= rvolMin and kfVel <= 0
+shortHardS = isTrend and htfDn and structDnA and bearReject and rvol >= rvolMin and kfVel <= 0 and rsi >= 45
+
+// Soft score A (0–100)
+scoreA_long = 0.0
+scoreA_long += longHardA ? 40.0 : 0.0
+scoreA_long += htfUp ? 20.0 : 0.0
+scoreA_long += rvol >= rvolMin ? 15.0 : 0.0
+scoreA_long += (kfVel >= 0 ? 10.0 : 0.0) + (bbWide ? 5.0 : 0.0)
+scoreA_long += structUpA ? 10.0 : 0.0
+
+scoreA_short = 0.0
+scoreA_short += (shortHardA or shortHardS) ? 40.0 : 0.0
+scoreA_short += htfDn ? 20.0 : 0.0
+scoreA_short += rvol >= rvolMin ? 15.0 : 0.0
+scoreA_short += (kfVel <= 0 ? 10.0 : 0.0) + (bbWide ? 5.0 : 0.0)
+scoreA_short += structDnA ? 10.0 : 0.0
+
+longSigA = longHardA and scoreA_long >= scoreLong and allowLong
+shortSigA = ((shortHardA and scoreA_short >= scoreLong) or (shortHardS and scoreA_short >= 50)) and allowShort
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLAYBOOK B — MEAN REVERSION
+// ═══════════════════════════════════════════════════════════════════════════
+revUpB = close > open and close > close[1]
+revDnB = close < open and close < close[1]
+
+longHardB = isRange and vwapZ <= -vwapZEntry and rsi <= rsiOs and revUpB and rvol >= rvolMin
+shortHardB = isRange and vwapZ >= vwapZEntry and rsi >= rsiOb and revDnB and rvol >= rvolMin
+
+scoreB_long = 0.0
+scoreB_long += longHardB ? 40.0 : 0.0
+scoreB_long += vwapZ <= -vwapZEntry ? 20.0 : 0.0
+scoreB_long += rvol >= rvolMin ? 15.0 : 0.0
+scoreB_long += rsi <= rsiOs ? 15.0 : 0.0
+scoreB_long += revUpB ? 10.0 : 0.0
+
+scoreB_short = 0.0
+scoreB_short += shortHardB ? 40.0 : 0.0
+scoreB_short += vwapZ >= vwapZEntry ? 20.0 : 0.0
+scoreB_short += rvol >= rvolMin ? 15.0 : 0.0
+scoreB_short += rsi >= rsiOb ? 15.0 : 0.0
+scoreB_short += revDnB ? 10.0 : 0.0
+
+longSigB = longHardB and scoreB_long >= scoreLong and allowLong
+shortSigB = shortHardB and scoreB_short >= scoreLong and allowShort
+
+// Composite display score: prefer active playbook side
+scoreDisp = isTrend ? math.max(scoreA_long, scoreA_short) : isRange ? math.max(scoreB_long, scoreB_short) : 50.0
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POSITION STATE — one trade at a time; no same-side spam
+// ═══════════════════════════════════════════════════════════════════════════
+var int pos = 0            // 1 long A, 2 short A, 3 long B, 4 short B, 0 flat
+var int entryBar = 0
+var float entryPrice = na
+var float stopLevel = na
+var float tpLevel = na
+var float trailLevel = na
+var int lastExitBar = -999999
+var int lastSide = 0       // 1 = last was long, -1 = last was short
+
+canTrade = pos == 0 and (bar_index - lastExitBar >= cooldownBars)
+
+// Detect fresh entries this bar (for markers — only ONE triangle per open)
+buyEntryA = false
+buyEntryB = false
+sellEntryA = false
+sellEntryB = false
+
+if canTrade
+    // Prefer SHORT when daily bearish — do not open a long and wait through losses
+    if allowShort and (shortSigA or shortSigB) and not (allowLong and (longSigA or longSigB) and dailyUp and not dailyDn)
+        if shortSigA
+            pos := 2
+            entryBar := bar_index
+            entryPrice := close
+            stopLevel := close + atrSlTrend * atr
+            tpLevel := close - atrTpTrend * atr
+            trailLevel := close + atrTrailTrend * atr
+            lastSide := -1
+            sellEntryA := true
+        else if shortSigB
+            pos := 4
+            entryBar := bar_index
+            entryPrice := close
+            stopLevel := close + atrSlRange * atr
+            tpLevel := close - atrTpRange * atr
+            trailLevel := na
+            lastSide := -1
+            sellEntryB := true
+    else if allowLong and longSigA
+        pos := 1
+        entryBar := bar_index
+        entryPrice := close
+        stopLevel := close - atrSlTrend * atr
+        tpLevel := close + atrTpTrend * atr
+        trailLevel := close - atrTrailTrend * atr
+        lastSide := 1
+        buyEntryA := true
+    else if allowShort and shortSigA
+        pos := 2
+        entryBar := bar_index
+        entryPrice := close
+        stopLevel := close + atrSlTrend * atr
+        tpLevel := close - atrTpTrend * atr
+        trailLevel := close + atrTrailTrend * atr
+        lastSide := -1
+        sellEntryA := true
+    else if allowLong and longSigB
+        pos := 3
+        entryBar := bar_index
+        entryPrice := close
+        stopLevel := close - atrSlRange * atr
+        tpLevel := close + atrTpRange * atr
+        trailLevel := na
+        lastSide := 1
+        buyEntryB := true
+    else if allowShort and shortSigB
+        pos := 4
+        entryBar := bar_index
+        entryPrice := close
+        stopLevel := close + atrSlRange * atr
+        tpLevel := close - atrTpRange * atr
+        trailLevel := na
+        lastSide := -1
+        sellEntryB := true
+
+// Manage open trade (no exit on entry bar — stops same-bar spam)
+exitNow = false
+exitReason = ""
+heldBars = bar_index - entryBar
+canExit = pos != 0 and heldBars >= minHoldBars
+
+if pos == 1 and canExit
+    if high >= entryPrice + beAtR * atr
+        stopLevel := math.max(stopLevel, entryPrice)
+    if not na(tpLevel) and high >= tpLevel
+        exitNow := true
+        exitReason := "A long TP"
+    else
+        trailLevel := math.max(nz(trailLevel, close - atrTrailTrend * atr), close - atrTrailTrend * atr)
+        stopLevel := math.max(stopLevel, trailLevel)
+        if low <= stopLevel
+            exitNow := true
+            exitReason := "A long stop/trail"
+        else if heldBars >= maxHoldTrend
+            exitNow := true
+            exitReason := "A long time"
+
+if pos == 2 and canExit
+    if low <= entryPrice - beAtR * atr
+        stopLevel := math.min(stopLevel, entryPrice)
+    if not na(tpLevel) and low <= tpLevel
+        exitNow := true
+        exitReason := "A short TP"
+    else
+        trailLevel := math.min(nz(trailLevel, close + atrTrailTrend * atr), close + atrTrailTrend * atr)
+        stopLevel := math.min(stopLevel, trailLevel)
+        if high >= stopLevel
+            exitNow := true
+            exitReason := "A short stop/trail"
+        else if heldBars >= maxHoldTrend
+            exitNow := true
+            exitReason := "A short time"
+
+if pos == 3 and canExit
+    zTargetHit = vwapZ >= -vwapZExit
+    if low <= stopLevel
+        exitNow := true
+        exitReason := "B long SL"
+    else if (not na(tpLevel) and high >= tpLevel) or zTargetHit
+        exitNow := true
+        exitReason := "B long TP"
+    else if heldBars >= maxHoldRange
+        exitNow := true
+        exitReason := "B long time"
+
+if pos == 4 and canExit
+    zTargetHitS = vwapZ <= vwapZExit
+    if high >= stopLevel
+        exitNow := true
+        exitReason := "B short SL"
+    else if (not na(tpLevel) and low <= tpLevel) or zTargetHitS
+        exitNow := true
+        exitReason := "B short TP"
+    else if heldBars >= maxHoldRange
+        exitNow := true
+        exitReason := "B short time"
+
+if exitNow
+    pos := 0
+    lastExitBar := bar_index
+    entryPrice := na
+    stopLevel := na
+    tpLevel := na
+    trailLevel := na
+
+// Markers ONLY on the bar a position actually opens (not every setup bar)
+buySignal = buyEntryA or buyEntryB
+sellSignal = sellEntryA or sellEntryB
+
+// SHORT SELL: red triangle = sell first (high), later cover lower
+plotshape(showBuySell and buyEntryA, title = "BUY A", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.normal, text = "BUY", textcolor = color.white)
+plotshape(showBuySell and buyEntryB, title = "BUY B", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.normal, text = "BUY", textcolor = color.white)
+plotshape(showBuySell and sellEntryA, title = "SHORT A", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.normal, text = "SHORT", textcolor = color.white)
+plotshape(showBuySell and sellEntryB, title = "SHORT B", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.normal, text = "SHORT", textcolor = color.white)
+
+plotshape(showBuySell and showPlaybookTag and buyEntryA, title = "Playbook A Long", style = shape.labelup, location = location.belowbar, color = color.new(color.teal, 70), size = size.tiny, text = "A", textcolor = color.white)
+plotshape(showBuySell and showPlaybookTag and buyEntryB, title = "Playbook B Long", style = shape.labelup, location = location.belowbar, color = color.new(color.aqua, 70), size = size.tiny, text = "B", textcolor = color.white)
+plotshape(showBuySell and showPlaybookTag and sellEntryA, title = "Playbook A Short", style = shape.labeldown, location = location.abovebar, color = color.new(color.maroon, 70), size = size.tiny, text = "A", textcolor = color.white)
+plotshape(showBuySell and showPlaybookTag and sellEntryB, title = "Playbook B Short", style = shape.labeldown, location = location.abovebar, color = color.new(color.fuchsia, 70), size = size.tiny, text = "B", textcolor = color.white)
+
+plot(showLevels and pos != 0 ? stopLevel : na, "Stop", color = color.red, style = plot.style_linebr, linewidth = 2)
+plot(showLevels and pos != 0 ? tpLevel : na, "TP", color = color.green, style = plot.style_linebr, linewidth = 2)
+plot(showLevels and (pos == 1 or pos == 2) ? trailLevel : na, "Trail", color = color.orange, style = plot.style_linebr, linewidth = 1)
+
+plot(scoreDisp, "Score", display = display.data_window)
+plot(adx, "ADX", display = display.data_window)
+plot(vwapZ, "VWAP z", display = display.data_window)
+plot(rvol, "RVOL", display = display.data_window)
+plot(regimeId, "RegimeId", display = display.data_window)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ALERTS (fire only on real entries / exits)
+// ═══════════════════════════════════════════════════════════════════════════
+alertcondition(sellSignal, title = "SHORT SELL", message = "BTC Regime Gate: SHORT SELL — sold high, cover lower later")
+alertcondition(buySignal, title = "BUY / LONG", message = "BTC Regime Gate: LONG — buy low, sell higher later")
+alertcondition(buyEntryA, title = "Long A (Trend)", message = "BTC Regime Gate: LONG Playbook A")
+alertcondition(sellEntryA, title = "Short A (Trend)", message = "BTC Regime Gate: SHORT Playbook A")
+alertcondition(buyEntryB, title = "Long B (Range)", message = "BTC Regime Gate: LONG Playbook B")
+alertcondition(sellEntryB, title = "Short B (Range)", message = "BTC Regime Gate: SHORT Playbook B")
+alertcondition(exitNow, title = "Exit", message = "BTC Regime Gate: EXIT signal")
+
+// Table legend
+var table leg = table.new(position.top_right, 2, 8, bgcolor = color.new(color.black, 80), border_width = 1)
+
+whyFlat = volShock ? "Vol shock block" : pos != 0 ? "In position — wait exit" : not canTrade ? "Cooldown after exit" : isNeutral ? "Neutral regime" : buySignal or sellSignal ? "Signal live" : isTrend ? "Wait pullback to EMA" : isRange ? "Wait VWAP stretch" : "No setup"
+
+if barstate.islast
+    table.cell(leg, 0, 0, "Mode", text_color = color.white)
+    table.cell(leg, 1, 0, tradeMode, text_color = color.yellow)
+    table.cell(leg, 0, 1, "Daily", text_color = color.white)
+    table.cell(leg, 1, 1, dailyUp ? "UP→longs" : dailyDn ? "DOWN→shorts" : "FLAT", text_color = color.aqua)
+    table.cell(leg, 0, 2, "Regime", text_color = color.white)
+    table.cell(leg, 1, 2, volShock ? "SHOCK" : isTrend ? "TREND" : isRange ? "RANGE" : "NEUTRAL", text_color = color.yellow)
+    table.cell(leg, 0, 3, "HTF", text_color = color.white)
+    table.cell(leg, 1, 3, htfUp ? "UP" : htfDn ? "DOWN" : "FLAT", text_color = color.aqua)
+    table.cell(leg, 0, 4, "Score", text_color = color.white)
+    table.cell(leg, 1, 4, str.tostring(scoreDisp, "#.##"), text_color = color.white)
+    table.cell(leg, 0, 5, "ADX", text_color = color.white)
+    table.cell(leg, 1, 5, str.tostring(adx, "#.##"), text_color = color.white)
+    table.cell(leg, 0, 6, "Pos", text_color = color.white)
+    table.cell(leg, 1, 6, pos == 0 ? "FLAT" : pos == 1 ? "L-A" : pos == 2 ? "S-A" : pos == 3 ? "L-B" : "S-B", text_color = color.lime)
+    table.cell(leg, 0, 7, "Why", text_color = color.white)
+    table.cell(leg, 1, 7, whyFlat, text_color = color.orange)
