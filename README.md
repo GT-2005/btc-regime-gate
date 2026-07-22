@@ -1,58 +1,152 @@
 # BTC Regime Gate
 
-**Student:** Ganesh Tilekar (UI23EC21)  
-**Topic:** Bitcoin (BTC/USDT) regime-adaptive trading system with Python backtests and TradingView deployment  
+### Regime-adaptive BTC/USDT trading system  
+**Python research backtester + TradingView Pine indicator**
 
-> Educational / research project. Not financial advice. Past backtests ≠ future profits.
+| | |
+|---|---|
+| **Author** | Ganesh Tilekar · UI23EC21 |
+| **Stack** | Python · Pine Script v6 · LightGBM (optional) |
+| **Market** | BTCUSDT · 15-minute (+ 1h / daily context) |
+| **Version** | 2.7 |
+| **Report** | [Project Report (PDF)](docs/PROJECT_REPORT.pdf) · [Markdown](docs/PROJECT_REPORT.md) |
 
----
-
-## What this repo contains
-
-| Path | Description |
-|------|-------------|
-| [`docs/PROJECT_REPORT.pdf`](docs/PROJECT_REPORT.pdf) | Full project report (PDF) |
-| [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md) | Same report in Markdown |
-| [`pine/BTC_Regime_Gate_v27.pine`](pine/BTC_Regime_Gate_v27.pine) | TradingView indicator (one position only) |
-| [`python/backtest_regime_gate.py`](python/backtest_regime_gate.py) | Main backtest engine |
-| [`python/train_btc_patterns.py`](python/train_btc_patterns.py) | ML feature + LightGBM training |
-| [`python/vpin_volume.py`](python/vpin_volume.py) | Volume clock / VPIN proxy |
-| [`python/models_btc15m/`](python/models_btc15m/) | Trained models + yearly result CSVs |
-| [`STRATEGY.md`](STRATEGY.md) | Locked strategy notes (honest results) |
+> **Interview one-liner:** I built a rule-based crypto trading system that changes behavior by market regime, enforces one position at a time, backtests with fees on multi-year data, and ships the same logic on TradingView — with honest results, not hype.
 
 ---
 
-## Strategy (v2.7) in one minute
+## Why this project exists
 
-- **Regimes:** Trend / Range / Shock (ADX + ATR)
-- **Playbook A:** Trend pullback (EMA + HTF)
-- **Playbook B:** Mean-reversion (VWAP z + RSI)
-- **Playbook C:** Breakout — **disabled** (lost money in tests)
-- **Position rule:** Only **one** long **or** short at a time  
-  - Long: BUY → EXIT  
-  - Short: SELL → COVER
-- **Risk:** 2% per trade, SL 1 ATR / TP 3 ATR (trend)
-- **Extras:** Time-series momentum filter (ON); optional `--vpin`, `--ml`
+Most retail “indicator stacks” fail for three reasons:
 
-**Best tested stack:** `short_only` — about **+1%** on 2025 vs buy-and-hold ~−6% (not a 15% system).
+1. They treat **trend and range** the same way  
+2. They allow **signal spam** (many sells while already short)  
+3. They report **optimistic backtests** (no fees, no failed ideas)
+
+This project fixes those with a clear engineering loop: **design → backtest → kill bad ideas → deploy**.
 
 ---
 
-## Setup
+## What I built
+
+```text
+┌─────────────────────┐     ┌──────────────────────────┐
+│  Layer A: Research  │     │  Layer B: Live chart     │
+│  Python backtester  │────▶│  TradingView Pine v2.7   │
+│  ML / VPIN optional │     │  Alerts + position state  │
+└─────────────────────┘     └──────────────────────────┘
+            │
+            ▼
+   Multi-year BTC 15m OHLCV
+   Fees + slippage + yearly OOS checks
+```
+
+### Core trading logic
+
+| Piece | Behavior |
+|-------|----------|
+| **Regime** | Trend / Range / Shock using ADX + ATR |
+| **Playbook A** | Trend pullback (EMA + higher-timeframe alignment) |
+| **Playbook B** | Mean reversion (VWAP z-score + RSI) |
+| **Playbook C** | Breakouts — **disabled** after it lost money in tests |
+| **Position rule** | **One trade only** — Long: BUY→EXIT · Short: SELL→COVER |
+| **Risk** | 2% equity risk · SL 1 ATR · TP 3 ATR (trend) |
+| **Filters** | Time-series momentum (default ON) · optional VPIN · optional ML gate |
+
+---
+
+## Results (honest)
+
+Starting capital **$100,000** per year · fees/slippage on · mode **`short_only`**
+
+| Year | Strategy return | Approx. profit | Buy & hold (context) |
+|------|-----------------|----------------|----------------------|
+| 2019 | −0.4% | −$417 | Strong bull |
+| 2020 | **+1.5%** | +$1,460 | Strong bull |
+| 2021 | +0.4% | +$404 | Bull |
+| 2022 | −1.4% | −$1,369 | Bear (B&H ~−64%) |
+| 2024 | −0.2% | −$182 | Strong bull |
+| 2025 | **+1.1%** | +$1,122 | B&H ~−6% |
+| **Sum** | | **~$+1,000** | |
+
+### How to read this in an interview
+
+- Edge is **small but real** in some years (e.g. 2025 vs buy-and-hold down).  
+- It **does not** capture full bull-market upside — by design it is cautious / short-biased.  
+- I rejected paths that looked “more profitable” but failed OOS (see below).
+
+### Ideas I tested and rejected
+
+| Idea | Outcome | Decision |
+|------|---------|----------|
+| Breakout playbook + higher risk | Large losses (~−15% class) | Disabled |
+| Pure ML entry spam | Catastrophic OOS losses | Rejected |
+| Over-aggressive VPIN filter | Almost no trades | Softened; opt-in only |
+
+This matters more than a fake +15% curve: it shows **research discipline**.
+
+---
+
+## Repository map
+
+```text
+btc-regime-gate/
+├── README.md                          ← you are here
+├── STRATEGY.md                        ← locked rules + lessons
+├── docs/
+│   ├── PROJECT_REPORT.pdf             ← full write-up for submission
+│   ├── PROJECT_REPORT.md
+│   └── TECHNICAL_REPORT_v2.md         ← earlier design notes
+├── pine/
+│   ├── BTC_Regime_Gate_v27.pine       ← ★ use this on TradingView
+│   └── BTC_Regime_Gate_v21.pine       ← older reference
+└── python/
+    ├── backtest_regime_gate.py        ← main engine + --years runner
+    ├── train_btc_patterns.py          ← features + LightGBM walk-forward
+    ├── vpin_volume.py                 ← volume clock / VPIN proxy
+    ├── backtest_ml_2025.py            ← honest OOS ML experiment
+    ├── requirements.txt
+    ├── BTC_Regime_Gate_Backtest_Colab.ipynb
+    └── models_btc15m/                 ← models + yearly CSVs
+```
+
+---
+
+## Tech stack
+
+| Area | Tools |
+|------|--------|
+| Data / backtest | Python 3, pandas, NumPy |
+| Indicators / risk | ATR, ADX, EMA, VWAP z, RVOL |
+| Optional ML | LightGBM, scikit-learn, joblib |
+| Microstructure research | VPIN / volume buckets (bar-level proxy) |
+| Charting | TradingView Pine Script v6 |
+| Validation | Year-by-year runs, walk-forward training, fee model |
+
+**Research influences (selected):** Volume Clock, VPIN, Time-Series Momentum (Moskowitz et al.), AFML practices (triple-barrier / walk-forward), Deflated Sharpe / backtest-overfitting caution.
+
+---
+
+## Quick start
+
+### 1) Clone & install
 
 ```bash
-git clone <your-repo-url>
-cd "College Project"   # or your folder name
+git clone https://github.com/GT-2005/btc-regime-gate.git
+cd btc-regime-gate
 python3 -m pip install -r python/requirements.txt
 ```
 
-### Data (not in GitHub — too large)
+macOS + LightGBM (if needed):
 
-Place your 15m BTCUSDT CSV locally, e.g.:
+```bash
+brew install libomp
+export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib
+```
 
-`/Users/<you>/BTC_DATA/BTCUSDT_15m_All.csv`
+### 2) Data (not in git — file is large)
 
-Or pass any path:
+Use your own Binance-style BTCUSDT **15m** CSV, then:
 
 ```bash
 python3 python/backtest_regime_gate.py \
@@ -61,36 +155,57 @@ python3 python/backtest_regime_gate.py \
   --years 2019,2020,2021,2022,2024,2025
 ```
 
-### TradingView
+Useful flags:
 
-1. Open Pine Editor  
+| Flag | Meaning |
+|------|---------|
+| `--mode short_only\|auto\|long_only\|both` | Side policy |
+| `--years 2019,2025` | Fresh $100k per year |
+| `--vpin` | Toxicity stand-aside filter |
+| `--ml` | Optional ML probability gate |
+| `--compare` | Compare all modes on one dataset |
+
+### 3) TradingView (live view)
+
+1. Open [Pine Editor](https://www.tradingview.com/)  
 2. Paste [`pine/BTC_Regime_Gate_v27.pine`](pine/BTC_Regime_Gate_v27.pine)  
-3. Add to **BTCUSDT 15m** chart  
-4. Remove older Regime Gate versions  
+3. Add to **BTCUSDT · 15 minutes**  
+4. Check the on-chart table: **Pos = FLAT / LONG / SHORT**  
+5. Valid short cycle: **SELL → COVER** (never stacked SELLs while already short)
 
 ---
 
-## Requirements
+## Design decisions (good interview answers)
 
-See [`python/requirements.txt`](python/requirements.txt).
+**Q: Why one position only?**  
+So risk is defined (2% per trade), exits are clear, and the chart matches the backtest. Pyramiding hides drawdowns.
 
-Main packages: `pandas`, `numpy`, `scikit-learn`, `lightgbm`, `joblib`, `scipy`, `openpyxl`.
+**Q: Why short_only as default?**  
+On the tested sample it was the most stable dollar outcome vs mixed long/short. Auto mode often diluted results.
 
-On macOS, LightGBM may need:
+**Q: Why keep ML optional?**  
+Walk-forward AUC was weak (~0.51–0.55). Rules carry the edge; ML is a soft filter, not the brain.
 
-```bash
-brew install libomp
-export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib
-```
+**Q: Did you overfit for 15%?**  
+No. Papers on backtest overfitting / Deflated Sharpe guided me to prefer small honest edges over optimized fairy tales.
 
 ---
 
-## Research notes
+## Project report
 
-KEEP papers used in design (volume clock, VPIN, Deflated Sharpe, AFML ideas, time-series momentum, etc.) are listed in the project report. Raw copyrighted PDFs are **not** uploaded.
+For the full academic write-up (abstract, literature triage, methodology, results, references):
+
+- **PDF:** [`docs/PROJECT_REPORT.pdf`](docs/PROJECT_REPORT.pdf)  
+- **Source:** [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md)
 
 ---
 
 ## Disclaimer
 
-Simulated results only. Crypto trading involves substantial risk of loss.
+This repository is for **education and portfolio demonstration**. Historical simulations are not live trading results. Cryptocurrency trading can lead to substantial losses. Nothing here is investment advice.
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE)
