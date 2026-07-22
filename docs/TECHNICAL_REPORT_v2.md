@@ -3,8 +3,7 @@
 ## Technical Report (Version 2.1)
 
 **Prepared by:**  
-Ganesh Tilekar (UI23EC21)  
-Department of Electronics and Communication Engineering
+Ganesh Tilekar
 
 **Date:** July 2026  
 **Supersedes:** Technical Report Version 2.0  

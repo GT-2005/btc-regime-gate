@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **Author** | Ganesh Tilekar · UI23EC21 |
+| **Author** | Ganesh Tilekar |
 | **Stack** | Python · Pine Script v6 · LightGBM (optional) |
 | **Market** | BTCUSDT · 15-minute (+ 1h / daily context) |
 | **Version** | 2.7 |
@@ -193,7 +193,7 @@ No. Papers on backtest overfitting / Deflated Sharpe guided me to prefer small h
 
 ## Project report
 
-For the full academic write-up (abstract, literature triage, methodology, results, references):
+For the full technical write-up (architecture, algorithms, methodology, results, references):
 
 - **PDF:** [`docs/PROJECT_REPORT.pdf`](docs/PROJECT_REPORT.pdf)  
 - **Source:** [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md)
@@ -202,7 +202,7 @@ For the full academic write-up (abstract, literature triage, methodology, result
 
 ## Disclaimer
 
-This repository is for **education and portfolio demonstration**. Historical simulations are not live trading results. Cryptocurrency trading can lead to substantial losses. Nothing here is investment advice.
+This repository is for **research and portfolio demonstration**. Historical simulations are not live trading results. Cryptocurrency trading can lead to substantial losses. Nothing here is investment advice.
 
 ---
 

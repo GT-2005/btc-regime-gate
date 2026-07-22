@@ -6,18 +6,11 @@
 
 ---
 
-**Prepared by**  
-Ganesh Tilekar (UI23EC21)  
-Himanshu Yadav (UI23EC25)
-
-**Under the Guidance of**  
-Dr. Sudeep Sharma  
-Dr. Ritesh Kumar  
-
-**Department of Electronics and Communication Engineering**
+**Author**  
+Ganesh Tilekar
 
 **Date:** July 2026  
-**Supersedes:** Technical Report Version 1.0
+**Version:** 2.0 (Improved)
 
 ---
 
@@ -380,7 +373,7 @@ This report documents a ten-algorithm BTC/USDT trading system: Kalman denoising,
 
 Version 2.0 keeps that institutional picture intact and improves it where Version 1.0 was weakest: inverted risk/reward, multi-signal spam, limited chart deployment, and optimistic reporting without enough failed-path documentation. The philosophy remains **quality over quantity** — most bars are skipped; capital is committed only when layered evidence agrees.
 
-**Limitations remain:** OFI is an OHLCV proxy; GARCH understates tails; backtests omit large market impact; measured fee-aware yearly returns are modest. The framework is a solid foundation for further academic and engineering work — not a promise of fixed annual profit.
+**Limitations remain:** OFI is an OHLCV proxy; GARCH understates tails; backtests omit large market impact; measured fee-aware yearly returns are modest. The framework is a solid foundation for further research and engineering work — not a promise of fixed annual profit.
 
 ---
 
@@ -425,7 +418,7 @@ Version 2.0 keeps that institutional picture intact and improves it where Versio
 
 ## Appendix B — Declaration
 
-Simulated results only. Past performance does not guarantee future results. This work is academic / educational and is not investment advice.
+Simulated results only. Past performance does not guarantee future results. This report is for research and portfolio demonstration and is not investment advice.
 
 ---
 
