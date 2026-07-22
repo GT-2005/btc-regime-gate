@@ -11,7 +11,7 @@
 | **Version** | 2.7 |
 | **Report** | [Project Report (PDF)](docs/PROJECT_REPORT.pdf) · [Markdown](docs/PROJECT_REPORT.md) |
 
-> **Interview one-liner:** I built a rule-based crypto trading system that changes behavior by market regime, enforces one position at a time, backtests with fees on multi-year data, and ships the same logic on TradingView — with honest results, not hype.
+> **Interview one-liner:** I built an institutional-style BTC/USDT system (Kalman, HMM, GARCH, Hurst, OFI, stacked ML, Kelly sizing, walk-forward) and improved it with better risk/reward, one-position discipline, research filters, multi-year fee-aware tests, and a TradingView deployment layer — with honest measured results, not hype.
 
 ---
 

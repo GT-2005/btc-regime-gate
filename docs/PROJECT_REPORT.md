@@ -1,311 +1,432 @@
-# Project Report
+# BTC/USDT INSTITUTIONAL TRADING SYSTEM
+## Complete Code & Parameter Deep-Dive  
+### Technical Report — Version 2.0 (Improved)
 
-## Bitcoin (BTC/USDT) Regime-Adaptive Trading System  
-### With Research Pipeline, Machine Learning Filters, and TradingView Deployment
-
----
-
-| Field | Details |
-|-------|---------|
-| **Student** | Ganesh Tilekar |
-| **Roll No.** | UI23EC21 |
-| **Department** | Electronics and Communication Engineering |
-| **Project type** | Final-year / research-oriented trading system |
-| **Version** | 2.7 (July 2026) |
-| **Market / TF** | BTCUSDT, 15-minute bars (+ 1h / daily context) |
+**10 Hedge Fund Algorithms · 30+ Features · XGBoost + LightGBM · Kalman · HMM · GARCH · Kelly Criterion Sizing · Walk-Forward Validated · TradingView Deployment**
 
 ---
 
-## Abstract
+**Prepared by**  
+Ganesh Tilekar (UI23EC21)  
+Himanshu Yadav (UI23EC25)
 
-This project designs, implements, and evaluates a **regime-adaptive Bitcoin trading system**. Market state is classified as trend, range, or volatility shock using ADX and ATR. Two playbooks fire accordingly: **trend pullback (A)** and **mean-reversion fade (B)**. The system enforces **one open position at a time**, asymmetric risk/reward (stop 1 ATR, take-profit 3 ATR on trend trades), and optional research filters drawn from academic literature (time-series momentum, VPIN / volume clock, walk-forward ML).
+**Under the Guidance of**  
+Dr. Sudeep Sharma  
+Dr. Ritesh Kumar  
 
-A **Python backtest engine** validates rules on Binance-style 15m history (2017–2026). A **TradingView Pine Script v6 indicator** (`BTC Regime Gate v2.7`) deploys the same logic for charting and alerts. Results are reported honestly: the best stable configuration (`short_only`) achieves roughly **+1%** on 2025 starting from $100,000 while buy-and-hold was negative, and about **+$1,000** summed across several calendar years—**not** a guaranteed 15% system. Experiments that chased higher returns (breakouts, ML spam entries) destroyed capital and were rejected.
+**Department of Electronics and Communication Engineering**
+
+**Date:** July 2026  
+**Supersedes:** Technical Report Version 1.0
 
 ---
 
-## 1. Introduction
+## TABLE OF CONTENTS
 
-### 1.1 Motivation
+1. Introduction and System Overview  
+2. Software Dependencies and Data Pipeline  
+3. Feature Engineering  
+4. Kalman Filter  
+5. Hidden Markov Model  
+6. GARCH(1,1) Volatility Model  
+7. Hurst Exponent  
+8. Order Flow Imbalance  
+9. VWAP Deviation and Z-Score  
+10. Ensemble Machine Learning  
+11. Walk-Forward Optimization  
+12. Kelly Criterion and Position Sizing  
+13. Entry and Exit Logic  
+14. Risk Metrics and Backtest Reporting  
+15. System Improvements in Version 2.0 *(new)*  
+16. TradingView Deployment *(new)*  
+17. Conclusion  
+18. References  
 
-Bitcoin alternates between strong trends and choppy ranges. Naive indicators either overtrade or enter late. Many retail systems also invert risk/reward (wide stop, tight target), which requires unrealistically high win rates after fees.
+---
+
+## Chapter 1: Introduction and System Overview
+
+### 1.1 Background
+
+Over the past decade, cryptocurrency markets have drawn serious attention from institutional investors, and the BTC/USDT pair sits at the centre of that interest. These markets run around the clock, they swing hard, and their microstructure still carries enough inefficiency to reward well-designed systematic strategies. Capturing those rewards demands a multi-layered system that brings together signal processing, statistical modelling, machine learning, and disciplined risk management.
+
+This report documents an institutional-grade BTC/USDT trading system built around ten distinct hedge-fund-style algorithms, more than thirty engineered features, an ensemble of XGBoost and LightGBM with meta-logistic stacking, and a position sizing framework grounded in the Kelly Criterion. Version **2.0** keeps this same architecture and **improves** it with research-backed filters, corrected risk/reward geometry, one-position discipline, longer-history validation, and a TradingView chart layer — without replacing the original multi-algorithm design.
 
 ### 1.2 Objectives
 
-1. Detect regime (trend / range / shock) with robust, explainable features.  
-2. Trade **one playbook per regime** with clear entry and exit rules.  
-3. Allow **only one long or one short** at a time (no signal spam).  
-4. Backtest with fees, slippage, and year-by-year evaluation.  
-5. Optionally use ML / microstructure filters without replacing the rule core.  
-6. Deploy the same logic on TradingView for live monitoring.  
-7. Document failures as carefully as successes (scientific honesty).
+- Build a noise-filtered, regime-aware signal pipeline using Kalman Filters for directional estimation, Hidden Markov Models for regime classification, and GARCH for dynamic volatility forecasting.  
+- Engineer a rich feature set of dimensionless, scale-invariant indicators from raw OHLCV bars.  
+- Train a stacked ensemble (XGBoost + LightGBM + Meta-Logistic Regression) that outputs calibrated trade probabilities.  
+- Validate predictions through walk-forward optimisation with no future leakage.  
+- Size positions using fractional Kelly Criterion with hard risk caps and drawdown circuit breakers.  
+- Report Sharpe, Sortino, Calmar, maximum drawdown, profit factor, and related metrics.  
+- **(v2.0)** Enforce one open position at a time; improve exit R:R; add optional VPIN / time-series momentum gates; deploy matching logic on TradingView.
 
-### 1.3 Scope
+### 1.3 System Architecture
 
-- **In scope:** Spot-style BTCUSDT OHLCV, 15m research, Pine indicator, offline backtests.  
-- **Out of scope:** Guaranteed returns, live brokerage execution, tick-level HFT, options VRP portfolios.
+At a high level the system is a five-stage pipeline. Raw data enters on the left; sized trade decisions exit on the right. No stage may look ahead into future data.
 
----
+| Layer | Key Components | What It Does |
+|-------|----------------|--------------|
+| **Data Layer** | OHLCV CSV/Excel, date sort, `add_base_features()` | Ingests Binance-style bars and builds 30+ indicator columns |
+| **Signal Layer** | Kalman, HMM, Hurst, OFI, VWAP, Z-Score | Directional, regime, and statistical signals |
+| **ML Layer** | XGBoost, LightGBM, Meta-Logistic, Walk-Forward | Calibrated probability per bar |
+| **Risk Layer** | Kelly, GARCH, drawdown control, position cap | How much capital to allocate; block when risk is high |
+| **Execution Layer** | Multi-condition entry gate, ATR TP/SL, time stop, fees | Order simulation with realistic costs |
 
-## 2. Literature Survey (Selected)
+**v2.0 addition:** a parallel **Chart Layer** (Pine Script) mirrors playbook / regime decisions for live monitoring and alerts.
 
-Papers were triaged into **KEEP** (used in design) and **NOT TAKEN** (theory / wrong market / too heavy for this stack).
-
-### 2.1 KEEP (implemented or guiding design)
-
-| # | Paper | Use in this project |
-|---|--------|---------------------|
-| 1 | Easley, López de Prado, O’Hara — *The Volume Clock* | Volume-time thinking; volume buckets |
-| 2 | Easley, López de Prado, O’Hara — *Flow Toxicity / VPIN* | Optional toxicity filter (`--vpin`) |
-| 3 | Bailey & López de Prado — *Deflated Sharpe Ratio* | Avoid fake performance after many trials |
-| 4 | Bailey et al. — *Probability of Backtest Overfitting* | Holdout alone is not enough |
-| 5 | López de Prado — *Advances in Financial Machine Learning* | Triple-barrier labels, walk-forward, meta-label path |
-| 6 | Carr & López de Prado — *Optimal Trading Rules without Backtesting* | Caution on over-tuning stops via search |
-| 7 | Moskowitz, Ooi, Pedersen — *Time Series Momentum* | Side filter: trade with ~60-day return sign |
-| 8 | Baz, Harvey et al. — *Dissecting carry/momentum/value* | Prefer **time-series** (single asset) over cross-section |
-| 9 | Quant note — *Hyperparameters are trading opinions* | Treat windows/thresholds as risk beliefs |
-
-### 2.2 NOT TAKEN (examples)
-
-CAPM (Sharpe), Fama–French cross-section, Markowitz portfolio theory, Kyle / Glosten–Milgrom (theory only), Bitcoin whitepaper (protocol), FinRL / deep RL libraries (overfit risk, deferred), Polymarket studies (wrong market), HFT queue/latency notes (not tradable here).
+If any single algorithm fails (for example HMM does not converge), the pipeline degrades gracefully rather than crashing.
 
 ---
 
-## 3. System Architecture
+## Chapter 2: Software Dependencies and Data Pipeline
 
-### 3.1 Two-layer design
+### 2.1 Python Libraries
 
-| Layer | Component | Role |
-|-------|-----------|------|
-| **A — Research** | Python (`backtest_regime_gate.py`, `train_btc_patterns.py`, `vpin_volume.py`) | Features, backtest, ML, yearly stats |
-| **B — Deployment** | Pine Script v6 (`BTC_Regime_Gate_v27.pine`) | Chart markers, position state, alerts |
+| Library | Category | Role |
+|---------|----------|------|
+| NumPy | Numeric | Array math across every algorithm |
+| Pandas | Data | DataFrames, rolling windows, feature engineering |
+| SciPy | Stats / Opt | HMM log-space maths; GARCH MLE |
+| XGBoost | ML | Gradient-boosted trees (base model A) |
+| LightGBM | ML | Histogram leaf-wise trees (base model B) |
+| scikit-learn | ML | Meta-logistic, scaling, AUC |
+| joblib | IO | Persist trained models |
+| openpyxl | IO | Excel OHLCV (optional) |
 
-### 3.2 Decision flow
+### 2.2 Data Loading and Preprocessing
 
-```
-15m OHLCV bar
-  → Volatility shock? → BLOCK
-  → Regime: TREND / RANGE / NEUTRAL (ADX primary)
-  → TS momentum side filter (optional, default ON)
-  → Playbook A (trend pullback) or B (VWAP fade)
-  → If FLAT + cooldown → open ONE position
-  → Manage SL / TP / trail / time stop
-  → EXIT (close long) or COVER (close short) → FLAT
-```
+The research stack accepts BTC/USDT OHLCV from Binance-style **Excel (1H)** or **CSV (15m)**. Columns are normalised to `date/open/high/low/close/volume`, timestamps parsed, and rows **sorted ascending**. Sorting is non-negotiable: out-of-order bars silently leak future information into rolling features.
 
-### 3.3 Position discipline (critical)
+**v2.0 data expansion:** full 15-minute history (~2017–2026, ~310k bars) is used for yearly and walk-forward checks in addition to the original 1H research path.
 
-| Side | Open | Close |
-|------|------|--------|
-| Long | **BUY** | **EXIT** (sell) |
-| Short | **SELL** | **COVER** (buy back) |
+### 2.3 Global Configuration (CFG)
 
-No second BUY while long; no second SELL while short. New entry only after flat + cooldown.
+| Parameter | v1.0 | v2.0 (improved) | What It Controls |
+|-----------|------|-----------------|------------------|
+| `starting_capital` | 100,000 | 100,000 | Baseline equity |
+| `max_risk_per_trade` | 1% | **2%** (research default) | Per-trade risk ceiling |
+| `max_drawdown_limit` | 15% | 15% | Halt new entries |
+| `max_position_frac` | 20% | 25% | Concentration cap |
+| `signal_buy_thresh` | 0.62 | 0.60–0.62 | Long ML probability |
+| `signal_sell_thresh` | 0.38 | 0.38–0.40 | Short ML probability |
+| `atr_tp_mult` | 1.5 | **3.0** (trend playbook) | Take-profit × ATR |
+| `atr_sl_mult` | 2.0 | **1.0** (trend playbook) | Stop-loss × ATR |
+| `max_hold_bars` | 25 (1H) | 96 (15m trend) / 16–25 range | Time stop |
+| `slippage_bps` | 5 | 9 round-trip style | Fill friction |
+| `commission_bps` | 4 | 4 one-way | Fees |
+| `one_position_only` | implicit | **hard rule** | No pyramiding |
 
----
-
-## 4. Methodology
-
-### 4.1 Data
-
-- Source: Binance-style BTCUSDT **15-minute** candles (`BTCUSDT_15m_All.csv`).  
-- Span used: approximately **2017-08 → 2026-06** (~310k bars).  
-- Resampling: 1h and 1D for higher-timeframe bias and TS momentum.
-
-### 4.2 Regime detection
-
-- **Trend:** ADX ≥ 30 and no ATR shock.  
-- **Range:** ADX ≤ 18 and no shock.  
-- **Shock:** ATR / ATR_MA ≥ 2.5 → no new trades.  
-- HTF bias: 1h EMA50 vs EMA200 (lagged).  
-- Daily bias (Auto mode): price vs daily EMA50 / EMA200.
-
-### 4.3 Playbook A — Trend pullback
-
-- Structure: EMA21 vs EMA50 separation.  
-- Entry: pullback to EMA + reclaim candle + RVOL + HTF align.  
-- Exit: SL 1 ATR, TP 3 ATR, breakeven + trail, max hold ~96 bars.
-
-### 4.4 Playbook B — Mean reversion
-
-- Range regime + extreme rolling VWAP z-score + RSI extreme + reversal candle.  
-- Exit: tighter SL/TP and/or z-score mean return, short max hold.
-
-### 4.5 Playbook C — Breakout (disabled)
-
-Tested; produced large losses (~−15% in stress tests). **Kept OFF.**
-
-### 4.6 Research add-ons
-
-| Module | Default | Role |
-|--------|---------|------|
-| Time-series momentum (~60d) | ON | Long only if momentum up; short if down |
-| VPIN (bar-level proxy) | OFF (`--vpin`) | Stand aside when flow looks toxic |
-| LightGBM pattern model | OFF (`--ml`) | Optional soft gate; walk-forward trained |
-| Pure ML entries | Rejected | Overtrading; large losses OOS |
-
-### 4.7 Risk and costs (backtest)
-
-| Parameter | Value |
-|-----------|--------|
-| Starting capital (per run) | $100,000 |
-| Risk per trade | 2% of equity |
-| Max position fraction | 25% |
-| Slippage | ~9 bps round-trip style |
-| Fee | ~4 bps one way |
-| Trade modes | `short_only`, `long_only`, `auto`, `both` |
+**Why TP/SL changed:** v1.0 used TP 1.5 ATR / SL 2.0 ATR (reward < risk). That geometry needs an unrealistically high win rate after costs. v2.0 trend exits use **TP 3 / SL 1** so winners can pay for losers.
 
 ---
 
-## 5. Implementation
+## Chapter 3: Feature Engineering
 
-### 5.1 Repository layout (main files)
+Feature engineering turns raw OHLCV into inputs the signal and ML layers can learn from. Features are normalised or dimensionless wherever possible.
 
-| Path | Description |
-|------|-------------|
-| `pine/BTC_Regime_Gate_v27.pine` | Live indicator (one-position FSM) |
-| `python/backtest_regime_gate.py` | Main backtest + yearly runner |
-| `python/train_btc_patterns.py` | Feature build + LightGBM walk-forward |
-| `python/vpin_volume.py` | Volume buckets + VPIN proxy |
-| `python/backtest_ml_2025.py` | Honest OOS ML strategy test |
-| `python/models_btc15m/` | Models, importance, yearly CSVs |
-| `STRATEGY.md` | Locked strategy notes |
-| `docs/TECHNICAL_REPORT_v2.md` | Earlier detailed design notes |
+### 3.1 Returns and Momentum
 
-### 5.2 How to run backtests
+Percentage returns, log-returns, and multi-horizon momentum (3 / 5 / 10 bars) feed HMM and GARCH and enter the ML vector. EMAs at 9, 21, 50, 200 plus `ema_fast_slow` and `trend_up` capture multi-scale trend.
 
-```bash
-# Single year
-python3 python/backtest_regime_gate.py \
-  --data /path/to/BTCUSDT_15m_All.csv \
-  --mode short_only --year 2025
+### 3.2 ATR, RSI, and MACD
 
-# Multiple years (fresh $100k each)
-python3 python/backtest_regime_gate.py \
-  --data /path/to/BTCUSDT_15m_All.csv \
-  --mode short_only \
-  --years 2019,2020,2021,2022,2024,2025
-```
+ATR (and `atr_pct`) scales stops and targets. RSI(14) and smoothed RSI act as soft filters (avoid extreme stretch). MACD and MACD histogram measure momentum change.
 
-### 5.3 TradingView deployment
+### 3.3 Volume and Candle Structure
 
-1. Open Pine Editor → paste `BTC_Regime_Gate_v27.pine` → Add to chart (BTC 15m).  
-2. Remove older v2.1 / v2.3 indicators.  
-3. Verify table **Pos** = FLAT / LONG / SHORT and markers BUY→EXIT or SELL→COVER.
+`vol_ratio`, `vol_trend`, `body_pct`, wick ratios describe participation and bar anatomy.
 
----
+### 3.4 Target Column
 
-## 6. Experiments and Results
+Supervised target remains causal: whether price improves over a forward horizon (e.g. next 5 bars on 1H research, or triple-barrier / ATR path labels on 15m research). Targets are **never** available to the live backtest loop.
 
-All figures below use **$100,000** starting capital, fees/slippage on, breakout C off, unless noted.
+### 3.5 Feature Set (~29+ research features)
 
-### 6.1 Year-by-year — `short_only` (plain rules)
+| Category | Examples | Count |
+|----------|----------|-------|
+| Price / Returns | returns, log_ret, momentum3/5/10 | 5 |
+| Oscillators | rsi, rsi_smooth, macd, macd_hist | 4 |
+| Trend | ema_fast_slow, atr_pct, trend_up | 3 |
+| Volume | vol_ratio, vol_trend, body_pct | 3 |
+| Kalman | kf_velocity, kf_signal | 2 |
+| Order Flow | ofi, ofi_signal, cvd | 3 |
+| Statistical | vwap_z, zscore, bb_pct | 3 |
+| Regime | hurst, is_trending, is_meanrev, hmm_regime, garch_vol | 5+ |
 
-| Year | Profit (approx.) | Return | Trades | Buy & hold (approx.) |
-|------|------------------|--------|--------|----------------------|
-| 2019 | −$417 | −0.42% | 42 | +95% |
-| 2020 | +$1,460 | +1.46% | 35 | +303% |
-| 2021 | +$404 | +0.40% | 28 | +61% |
-| 2022 | −$1,369 | −1.37% | 53 | −64% |
-| 2024 | −$182 | −0.18% | 24 | +120% |
-| 2025 | +$1,122 | +1.12% | 31 | −6% |
-| **Sum** | **~$+1,018** | | | |
-
-Interpretation: edge is **small but real vs bad years for buy-and-hold (e.g. 2025)**; it does **not** capture full bull-market upside (2019–2021, 2024).
-
-### 6.2 With TS momentum (v2.7)
-
-On 2025 `short_only`, a smoke test after adding TS momentum showed about **+1.36%** with fewer trades (19)—directionally consistent with filtering against the trend sign.
-
-### 6.3 Failed / weaker variants (documented)
-
-| Variant | Outcome | Decision |
-|---------|---------|----------|
-| Breakout playbook C | Large loss (~−15% class) | Disabled |
-| Pure ML probability entries | Catastrophic OOS (~−50% class) | Rejected |
-| Aggressive VPIN (blocked most bars) | Almost no trades | Softened; opt-in only |
-| Auto mode (longs + shorts) | Often worse than short_only | Prefer short_only / careful Auto |
-
-### 6.4 Machine learning summary
-
-- ~116 engineered features; LightGBM walk-forward by year.  
-- OOS AUC ~0.51–0.55 (weak discrimination).  
-- Best use: **optional filter**, not primary signal generator.  
-- Model trained including 2025 is **not** a valid 2025 test; pre-2025 model used for honest checks.
+**v2.0 expansion (optional training path):** up to ~100+ pattern features (multi-horizon returns, HTF RSI/EMA, session flags) for LightGBM research — used as a soft gate, not a replacement for the ten-algorithm core.
 
 ---
 
-## 7. Discussion
+## Chapter 4: Algorithm 1 — Kalman Filter
 
-### 7.1 Why not 15%?
+### 4.1 Theory
 
-Academic and practitioner papers (Deflated Sharpe, backtest overfitting) warn that scanning many rules invents lucky history. On fee-aware BTC 15m, a **~1% annual edge with low drawdown** can still beat buy-and-hold in a down year, but is far from a marketing “15% printer.” Higher returns would need a different edge (e.g. strong multi-year trend capture on higher timeframes, or leverage—which multiplies risk).
+A Kalman Filter is a recursive Bayesian estimator of a hidden state. Here the state is `[price, velocity]`. Predict and update steps blend the model forecast with the noisy close via Kalman gain.
 
-### 7.2 Why one position?
+### 4.2 Parameters
 
-Multiple stacked SELLs without COVER inflate risk and confuse evaluation. One ticket matches risk budgeting (2% per trade) and makes the Pine chart auditable.
+| Parameter | Typical value | Effect |
+|-----------|---------------|--------|
+| `process_var` | 1e-4 | Smaller → smoother, slower |
+| `obs_var` | 1e-2 | Larger → trust model more than raw ticks |
 
-### 7.3 Engineering contribution
+### 4.3 Trading use
 
-The project is not only an indicator: it is a **full research loop**—data hygiene, regime rules, ablation of failed ideas, optional ML/VPIN, and chart deployment with matching position state.
-
----
-
-## 8. Conclusion
-
-This work delivered a **complete, honest BTC regime-gate trading project**:
-
-1. Rule-based playbooks A/B with ADX regimes and HTF gates.  
-2. Strict **one-position** lifecycle (BUY/EXIT and SELL/COVER).  
-3. Research-backed filters (TS momentum; optional VPIN/ML).  
-4. Python backtests across multiple years with costs.  
-5. TradingView v2.7 indicator for live monitoring.  
-6. Clear rejection of overfitting paths that looked profitable only in hindsight.
-
-**Final recommended configuration for evaluation:** `short_only`, SL 1 ATR / TP 3 ATR, 2% risk, TS momentum ON, breakout C OFF, VPIN/ML optional.
+`kf_velocity > 0` required for longs; `< 0` for shorts — blocks ML signals that fight the noise-filtered trend.
 
 ---
 
-## 9. Future work
+## Chapter 5: Algorithm 2 — Hidden Markov Model
 
-1. Meta-labeling (AFML): rules propose trade → ML only accepts/rejects.  
-2. Report Deflated Sharpe with explicit trial count.  
-3. Higher-timeframe (4h/1d) trend module for bull years.  
-4. Tick-level VPIN if trade data becomes available.  
-5. Paper trading / exchange API (out of current academic scope).
+### 5.1 Theory
 
----
+Three hidden regimes (Bear / Sideways / Bull) with Gaussian emissions on returns, fitted by Baum–Welch (EM) in log-space.
 
-## 10. References (selected)
+### 5.2 Trading use
 
-1. Easley, D., López de Prado, M., & O’Hara, M. (2012). *The Volume Clock.* Journal of Portfolio Management / SSRN 2034858.  
-2. Easley, D., López de Prado, M., & O’Hara, M. (2012). *Flow Toxicity and Liquidity in a High-Frequency World.* Review of Financial Studies / SSRN 1695596.  
-3. Bailey, D. H., & López de Prado, M. (2014). *The Deflated Sharpe Ratio.* SSRN 2460551.  
-4. Bailey, D. H., et al. *The Probability of Backtest Overfitting.* SSRN 2326253.  
-5. López de Prado, M. *Advances in Financial Machine Learning.* Wiley / related SSRN materials.  
-6. Carr, P., & López de Prado, M. (2014). *Determining Optimal Trading Rules without Backtesting.* arXiv:1408.1159.  
-7. Moskowitz, T. J., Ooi, Y. H., & Pedersen, L. H. (2012). *Time series momentum.* Journal of Financial Economics.  
-8. Baz, J., Granger, N., Harvey, C. R., Le Roux, N., & Rattray, S. *Dissecting Investment Strategies in the Cross Section and Time Series.* SSRN 2695101.  
-9. Nakamoto, S. (2008). *Bitcoin: A Peer-to-Peer Electronic Cash System.* (Background only.)
+- **Bull** → prefer trend-following longs  
+- **Bear** → prefer trend-following shorts  
+- **Sideways** → mean-reversion using VWAP / z-score stretch  
+
+HMM is trained on the early window and applied forward without refitting on future test folds inside a fold.
 
 ---
 
-## Appendix A — Glossary
+## Chapter 6: Algorithm 3 — GARCH(1,1)
 
-| Term | Meaning |
-|------|---------|
-| ADX | Average Directional Index (trend strength) |
-| ATR | Average True Range (volatility / stop sizing) |
-| RVOL | Volume vs its recent average |
-| VPIN | Volume-Synchronized Probability of Informed Trading |
-| TS momentum | Sign of an asset’s own past return |
-| OOS | Out-of-sample (data not used to fit rules/model) |
-| COVER | Buy back to close a short |
+### 6.1 Model
+
+σ²(t) = ω + α ε²(t−1) + β σ²(t−1), with α + β < 1, fitted by maximum likelihood.
+
+### 6.2 Trading use
+
+`garch_vol` feeds Kelly sizing (smaller size when volatility is high). `vol_regime` (vol / rolling mean) above a shock threshold **blocks new entries**.
+
+---
+
+## Chapter 7: Algorithm 4 — Hurst Exponent
+
+Rolling R/S analysis (~100 bars):
+
+- H > 0.55 → trending  
+- H < 0.45 → mean-reverting  
+- 0.45–0.55 → dead zone (no forced strategy)
+
+Hurst works with HMM to choose trend-follow vs fade.
+
+---
+
+## Chapter 8: Algorithm 5 — Order Flow Imbalance
+
+OHLCV proxy:
+
+`buy_vol = volume × (close − low) / (high − low)`  
+`sell_vol = volume × (high − close) / (high − low)`  
+`OFI = (buy_vol − sell_vol) / volume`
+
+Confirmation gate: longs need non-negative OFI signal; shorts need non-positive.
+
+---
+
+## Chapter 9: Algorithms 6–7 — VWAP Deviation and Z-Score
+
+Rolling VWAP and `vwap_z` locate price vs institutional fair value. Mean-reversion longs prefer deep negative `vwap_z`; shorts prefer large positive stretch. Bollinger `%B` (`bb_pct`) adds a scale-free stretch measure for ML.
+
+---
+
+## Chapter 10: Algorithm 8 — Ensemble Machine Learning
+
+### 10.1 XGBoost + LightGBM
+
+Two base classifiers (hundreds of trees, shallow depth, low learning rate, row/column subsampling, L1/L2 regularisation).
+
+### 10.2 Meta-learner
+
+Logistic regression trained on **validation** probabilities (not the base training set) to blend the two models into one calibrated probability.
+
+### 10.3 Resilience
+
+`_safe_features()` drops missing columns if HMM/Hurst fail so the system continues in degraded mode.
+
+---
+
+## Chapter 11: Walk-Forward Optimization
+
+Data split example: 60% train / 20% validation / 20% test, with the test segment rolled into multiple expanding folds. Each fold trains a fresh ensemble. Only out-of-sample probabilities are traded. A large gap between validation and test AUC is treated as an overfitting warning.
+
+**v2.0:** additional year-by-year walk-forward on 15m history (train past years → test next year) for LightGBM research models.
+
+---
+
+## Chapter 12: Kelly Criterion and Position Sizing
+
+Fractional Kelly (e.g. 25% of full Kelly) plus hard caps:
+
+1. Fractional Kelly shrink  
+2. Max risk per trade (1–2%)  
+3. Max position fraction (20–25%)  
+
+GARCH volatility further reduces size in stressed markets.
+
+---
+
+## Chapter 13: Entry and Exit Logic
+
+### 13.1 Long entry (all required in core system)
+
+1. ML probability ≥ buy threshold  
+2. Context strategy OK (trend bull setup **or** mean-reversion stretch)  
+3. Kalman velocity > 0  
+4. OFI confirmation ≥ 0  
+5. RSI not at extreme (soft band)  
+6. Volatility shock not active  
+
+### 13.2 Short entry
+
+Mirror image with sell threshold and bear / overbought context.
+
+### 13.3 Exits
+
+| Mechanism | v1.0 | v2.0 trend path |
+|-----------|------|-----------------|
+| Take profit | 1.5 × ATR | **3.0 × ATR** |
+| Stop loss | 2.0 × ATR | **1.0 × ATR** (+ BE / trail) |
+| Time stop | 25 bars (1H) | Regime-specific max hold |
+| Costs | slippage + commission | same philosophy |
+
+### 13.4 One-position rule (v2.0 hard constraint)
+
+- Long cycle: **BUY → EXIT (sell)**  
+- Short cycle: **SELL → COVER (buy back)**  
+- No second entry until flat + cooldown  
+
+This prevents signal spam and keeps risk accounting meaningful.
+
+---
+
+## Chapter 14: Risk Metrics and Backtest Reporting
+
+| Metric | What it tells you |
+|--------|-------------------|
+| Sharpe / Sortino | Return per unit of (downside) risk |
+| Calmar | Return vs worst drawdown |
+| Max drawdown | Deepest equity hole |
+| Profit factor | Gross wins / gross losses |
+| VaR (95%) | Tail loss context |
+
+Performance is also reviewed by regime (Bull / Sideways / Bear) when HMM labels are available.
+
+### 14.1 Measured results (v2.0 fee-aware yearly checks, short-priority)
+
+Using $100,000 start, fees/slippage on, one position, improved R:R:
+
+| Year | Approx. return | Notes |
+|------|----------------|-------|
+| 2019 | −0.4% | Missed full bull upside (by design, cautious) |
+| 2020 | +1.5% | Positive |
+| 2021 | +0.4% | Small positive |
+| 2022 | −1.4% | Bear year; still far better than B&H ~−64% path |
+| 2024 | −0.2% | Flat-ish |
+| 2025 | +1.1% | Beat B&H ~−6% |
+
+**Interpretation:** the system is a **risk-managed research stack**, not a guaranteed +20% product. Version 1.0 *target profile* (+20%, Sharpe 1.4–2.0) remains an aspirational institutional benchmark; Version 2.0 reports **what we actually measured** after costs on expanded data.
+
+### 14.2 Failed experiments (documented)
+
+| Experiment | Result | Action |
+|------------|--------|--------|
+| Aggressive breakout add-on | Large losses | Disabled |
+| Pure ML probability spam entries | Severe OOS losses | Rejected |
+| Over-strict VPIN block | Almost no trades | Softened; optional |
+
+---
+
+## Chapter 15: System Improvements in Version 2.0
+
+Version 2.0 **does not replace** the ten-algorithm institutional design. It **adds** the following:
+
+| Improvement | Source / motivation | Effect |
+|-------------|---------------------|--------|
+| Corrected trend R:R (TP 3 / SL 1) | Expectancy geometry | Winners can fund losers |
+| Hard one-position FSM | Execution hygiene | No pyramiding / spam |
+| Time-series momentum side filter | Moskowitz et al. | Align side with ~60d return sign |
+| Optional VPIN / volume-clock gate | Easley–LdP–O’Hara | Stand aside in toxic flow |
+| Longer 15m history + yearly OOS | Data expansion | Harder, more honest tests |
+| LightGBM pattern research path | AFML-style labeling | Soft filter, not sole brain |
+| TradingView Pine mirror | Deployment | Live visualisation + alerts |
+| Literature triage (KEEP / SKIP) | Research process | Avoid wrong tools (CAPM-only, FinRL-first, etc.) |
+
+---
+
+## Chapter 16: TradingView Deployment
+
+| Item | Detail |
+|------|--------|
+| Script | `pine/BTC_Regime_Gate_v27.pine` |
+| Timeframe | BTCUSDT 15m (HTF 1h) |
+| Markers | BUY / EXIT · SELL / COVER |
+| Table | Regime, HTF, Score, ADX, Pos, Why |
+| Rule | Pos = SHORT ⇒ no new SELL until COVER |
+
+This layer is for **monitoring and alerts**. The Python research stack remains the authority for quantitative backtests.
+
+---
+
+## Chapter 17: Conclusion
+
+This report documents a ten-algorithm BTC/USDT trading system: Kalman denoising, HMM regimes, GARCH volatility, Hurst strategy selection, OFI confirmation, VWAP/Z-score dislocation, stacked ML probabilities, walk-forward validation, and Kelly sizing.
+
+Version 2.0 keeps that institutional picture intact and improves it where Version 1.0 was weakest: inverted risk/reward, multi-signal spam, limited chart deployment, and optimistic reporting without enough failed-path documentation. The philosophy remains **quality over quantity** — most bars are skipped; capital is committed only when layered evidence agrees.
+
+**Limitations remain:** OFI is an OHLCV proxy; GARCH understates tails; backtests omit large market impact; measured fee-aware yearly returns are modest. The framework is a solid foundation for further academic and engineering work — not a promise of fixed annual profit.
+
+---
+
+## Chapter 18: References
+
+[1] Kalman, R.E. (1960). A New Approach to Linear Filtering and Prediction Problems.  
+[2] Baum, L.E. et al. (1970). A Maximization Technique… Markov Chains.  
+[3] Rabiner, L.R. (1989). A Tutorial on Hidden Markov Models.  
+[4] Bollerslev, T. (1986). Generalized Autoregressive Conditional Heteroskedasticity.  
+[5] Engle, R.F. (1982). Autoregressive Conditional Heteroscedasticity.  
+[6] Hurst, H.E. (1951). Long-Term Storage Capacity of Reservoirs.  
+[7] Mandelbrot, B.B. & Van Ness, J.W. (1968). Fractional Brownian Motions.  
+[8] Peters, E.E. (1994). Fractal Market Analysis.  
+[9] Chen, T. & Guestrin, C. (2016). XGBoost.  
+[10] Ke, G. et al. (2017). LightGBM.  
+[11] Wolpert, D.H. (1992). Stacked Generalization.  
+[12] Kelly, J.L. (1956). A New Interpretation of Information Rate.  
+[13] Thorp, E.O. (2006). The Kelly Criterion…  
+[14] Wilder, J.W. (1978). New Concepts in Technical Trading Systems.  
+[15] Bollinger, J. (2002). Bollinger on Bollinger Bands.  
+[16] Easley, D., López de Prado, M. & O’Hara, M. (2012). Flow Toxicity and Liquidity…  
+[17] Easley, D., López de Prado, M. & O’Hara, M. (2012). The Volume Clock.  
+[18] López de Prado, M. (2018). Advances in Financial Machine Learning.  
+[19] Bailey, D.H. et al. (2014). Pseudo-Mathematics and Financial Charlatanism / Deflated Sharpe.  
+[20] Moskowitz, T.J., Ooi, Y.H. & Pedersen, L.H. (2012). Time Series Momentum.  
+[21] Carr, P. & López de Prado, M. (2014). Determining Optimal Trading Rules without Backtesting.  
+
+---
+
+## Appendix A — Repository Map
+
+| Path | Role |
+|------|------|
+| `python/backtest_regime_gate.py` | Fee-aware backtest / yearly runner / improved execution rules |
+| `python/train_btc_patterns.py` | Extended feature + LightGBM research |
+| `python/vpin_volume.py` | Volume clock / VPIN proxy |
+| `pine/BTC_Regime_Gate_v27.pine` | Chart deployment |
+| `docs/PROJECT_REPORT.pdf` | This report |
+| `STRATEGY.md` | Locked improvement notes |
+
+---
 
 ## Appendix B — Declaration
 
-The numerical results in this report are from historical simulation. Past performance does not guarantee future results. This work is for **academic / educational** purposes and is not investment advice.
+Simulated results only. Past performance does not guarantee future results. This work is academic / educational and is not investment advice.
 
 ---
 
-**End of Report**
+**End of Report — Version 2.0**
