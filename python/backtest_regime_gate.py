@@ -90,9 +90,9 @@ def resolve_data_path(cli_path: str | None = None) -> str:
 
 DATA_PATH = None  # resolved in main()
 STARTING_CAPITAL = 100_000.0
-RISK_PER_TRADE = 0.02          # 2% — scales the proven edge (was 1% → ~0.4–1% return)
-RISK_BREAKOUT = 0.02
-MAX_POSITION_FRAC = 0.25
+RISK_PER_TRADE = 0.10         # 10% risk per trade (was 2%; scales size; higher DD)
+RISK_BREAKOUT = 0.10
+MAX_POSITION_FRAC = 1.00      # allow full spot notional so 10% risk is not capped at 25%
 SLIPPAGE_BPS = 9.0
 FEE_BPS_ONE_WAY = 4.0
 BAR_TF = "15min"

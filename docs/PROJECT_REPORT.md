@@ -99,9 +99,9 @@ The research stack accepts BTC/USDT OHLCV from Binance-style **Excel (1H)** or *
 | Parameter | v1.0 | v2.0 (improved) | What It Controls |
 |-----------|------|-----------------|------------------|
 | `starting_capital` | 100,000 | 100,000 | Baseline equity |
-| `max_risk_per_trade` | 1% | **2%** (research default) | Per-trade risk ceiling |
+| `max_risk_per_trade` | 1% | **10%** (current default) | Per-trade risk ceiling |
 | `max_drawdown_limit` | 15% | 15% | Halt new entries |
-| `max_position_frac` | 20% | 25% | Concentration cap |
+| `max_position_frac` | 20% | **100%** spot | Concentration cap (raised so 10% risk is not blocked) |
 | `signal_buy_thresh` | 0.62 | 0.60–0.62 | Long ML probability |
 | `signal_sell_thresh` | 0.38 | 0.38–0.40 | Short ML probability |
 | `atr_tp_mult` | 1.5 | **3.0** (trend playbook) | Take-profit × ATR |

@@ -50,7 +50,7 @@ This project fixes those with a clear engineering loop: **design → backtest �
 | **Playbook B** | Mean reversion (VWAP z-score + RSI) |
 | **Playbook C** | Breakouts — **disabled** after it lost money in tests |
 | **Position rule** | **One trade only** — Long: BUY→EXIT · Short: SELL→COVER |
-| **Risk** | 2% equity risk · SL 1 ATR · TP 3 ATR (trend) |
+| **Risk** | 10% equity risk · SL 1 ATR · TP 3 ATR (trend) · full spot size allowed |
 | **Filters** | Time-series momentum (default ON) · optional VPIN · optional ML gate |
 
 ---
@@ -178,7 +178,7 @@ Useful flags:
 ## Design decisions (good interview answers)
 
 **Q: Why one position only?**  
-So risk is defined (2% per trade), exits are clear, and the chart matches the backtest. Pyramiding hides drawdowns.
+So risk is defined (10% per trade), exits are clear, and the chart matches the backtest. Pyramiding hides drawdowns. Higher risk raises both profit and drawdown.
 
 **Q: Why short_only as default?**  
 On the tested sample it was the most stable dollar outcome vs mixed long/short. Auto mode often diluted results.

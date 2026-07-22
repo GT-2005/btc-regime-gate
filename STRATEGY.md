@@ -13,7 +13,8 @@ Use this when explaining the system quickly.
 |---------|--------|
 | Mode | `short_only` |
 | SL / TP (trend) | 1 ATR / 3 ATR |
-| Risk | 2% per trade |
+| Risk | **10%** per trade |
+| Max position | **100%** spot notional (so 10% risk can size) |
 | Breakout C | OFF |
 | TS momentum | ON |
 | VPIN / ML | optional |
