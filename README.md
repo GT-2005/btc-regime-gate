@@ -1,4 +1,4 @@
-# BTC Regime Gate — College Project
+# BTC Regime Gate
 
 **Student:** Ganesh Tilekar (UI23EC21)  
 **Topic:** Bitcoin (BTC/USDT) regime-adaptive trading system with Python backtests and TradingView deployment  
