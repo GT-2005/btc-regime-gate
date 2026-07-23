@@ -1,40 +1,45 @@
-# Git
-.DS_Store
-**/.DS_Store
-
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.so
 .Python
+build/
+dist/
+*.egg-info/
 .venv/
 venv/
 env/
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
+
+# Notebooks
 .ipynb_checkpoints/
 
-# Large / regenerable backtest outputs
-backtest_equity.csv
-backtest_trades.csv
-python/backtest_equity.csv
-python/backtest_trades.csv
-python/backtest_yearly_summary.csv
-python/models_btc15m/features_decimated.csv
-python/models_btc15m/ml_strategy_equity_2025.csv
+# Data — never commit market data or credentials
+data/*.xlsx
+data/*.csv
+!data/sample_data.xlsx
+!data/.gitkeep
 
-# Copyrighted paper text extracts (keep PDFs off GitHub)
-docs/paper_extracts/
+# Model artefacts
+*.pkl
+*.joblib
+*.model
 
-# Secrets / local data
+# Output
+output/*
+!output/.gitkeep
+
+# Secrets
 .env
-*.pem
-BTC_DATA/
-**/BTCUSDT*.csv
-**/BTCUSDT*.xlsx
+*.key
+config_local.py
 
-# OS / IDE
-.idea/
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
 .vscode/
-*.swp
+.idea/
+
+# Local research notes / paper dumps (not part of the public package)
+docs/paper_extracts/
